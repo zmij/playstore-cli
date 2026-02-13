@@ -8,7 +8,7 @@ import type { Command } from 'commander';
 import chalk from 'chalk';
 import { createClient } from '../client.js';
 import { getWorktreeRoot } from '../auth.js';
-import { LANGUAGE_MAP, DEVICE_TYPE_MAP, LOCALE_TO_SHORT } from '../types.js';
+import { LANGUAGE_MAP, LOCALE_EXPAND, DEVICE_TYPE_MAP, LOCALE_TO_SHORT } from '../types.js';
 import type { ParsedScreenshotFilename, ScreenshotUploadMode } from '../types.js';
 
 const IMAGE_TYPES = ['phoneScreenshots', 'sevenInchScreenshots', 'tenInchScreenshots'];
@@ -213,8 +213,11 @@ export function registerScreenshotsCommands(program: Command): void {
             continue;
           }
 
-          const locale = LANGUAGE_MAP[lang] || lang;
-          console.log(chalk.bold(`\n${lang} (${locale}):`));
+          // Expand language to potentially multiple store locales
+          const locales = LOCALE_EXPAND[lang] || [LANGUAGE_MAP[lang] || lang];
+
+          for (const locale of locales) {
+          console.log(chalk.bold(`\n${lang} → ${locale}:`));
           console.log(`  Found ${screenshots.length} screenshots`);
 
           // Group by device type
@@ -281,6 +284,7 @@ export function registerScreenshotsCommands(program: Command): void {
               }
             }
           }
+          } // end locale expansion
         }
 
         // Commit changes if not dry run

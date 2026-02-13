@@ -66,7 +66,7 @@ export const DEVICE_TYPE_MAP: Record<string, string> = {
  * Language code mapping from our format to Google Play locale
  */
 export const LANGUAGE_MAP: Record<string, string> = {
-  'en': 'en-US',
+  'en': 'en-GB',
   'en-US': 'en-US',
   'en-GB': 'en-GB',
   'de': 'de-DE',
@@ -77,10 +77,24 @@ export const LANGUAGE_MAP: Record<string, string> = {
   'fi': 'fi-FI',
   'he': 'iw-IL',
   'hi': 'hi-IN',
+  'id': 'id',
   'ja': 'ja-JP',
   'ko': 'ko-KR',
+  'pt': 'pt-BR',
+  'pt-BR': 'pt-BR',
+  'pt-PT': 'pt-PT',
   'ru': 'ru-RU',
   'zh': 'zh-CN',
+};
+
+/**
+ * Languages that expand to multiple store locales for screenshots.
+ * When uploading screenshots, files with these language prefixes
+ * are uploaded to all listed locales.
+ */
+export const LOCALE_EXPAND: Record<string, string[]> = {
+  'es': ['es-ES', 'es-419'],
+  'pt': ['pt-BR', 'pt-PT'],
 };
 
 /**
@@ -97,8 +111,11 @@ export const LOCALE_TO_SHORT: Record<string, string> = {
   'fi-FI': 'fi',
   'iw-IL': 'he',
   'hi-IN': 'hi',
+  'id': 'id',
   'ja-JP': 'ja',
   'ko-KR': 'ko',
+  'pt-BR': 'pt',
+  'pt-PT': 'pt-PT',
   'ru-RU': 'ru',
   'zh-CN': 'zh',
 };
