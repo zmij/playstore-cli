@@ -10,6 +10,7 @@ import { Command } from 'commander';
 import { registerReadCommands } from './commands/read.js';
 import { registerListingsCommands } from './commands/listings.js';
 import { registerScreenshotsCommands } from './commands/screenshots.js';
+import { registerTracksCommands } from './commands/tracks.js';
 
 const program = new Command();
 
@@ -22,5 +23,6 @@ program
 registerReadCommands(program);
 registerListingsCommands(program);
 registerScreenshotsCommands(program);
+registerTracksCommands(program);
 
 program.parse();

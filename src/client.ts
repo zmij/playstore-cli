@@ -161,6 +161,37 @@ export class PlayStoreClient {
     }
   }
 
+  /**
+   * Update a track with new releases
+   */
+  async updateTrack(
+    track: string,
+    releases: Array<{
+      versionCodes: string[];
+      status: string;
+      releaseNotes?: Array<{ language: string; text: string }>;
+    }>
+  ): Promise<void> {
+    const editId = await this.ensureEdit();
+
+    await this.publisher.edits.tracks.update({
+      packageName: this.packageName,
+      editId,
+      track,
+      requestBody: {
+        track,
+        releases: releases.map((r) => ({
+          versionCodes: r.versionCodes,
+          status: r.status,
+          releaseNotes: r.releaseNotes?.map((n) => ({
+            language: n.language,
+            text: n.text,
+          })),
+        })),
+      },
+    });
+  }
+
   // ============================================================================
   // Listings
   // ============================================================================
