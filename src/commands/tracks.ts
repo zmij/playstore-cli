@@ -5,24 +5,23 @@
  * on Google Play Console.
  */
 
-import { readFileSync } from 'fs';
+import { readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
 import type { Command } from 'commander';
 import chalk from 'chalk';
 import { createClient } from '../client.js';
 import { getWorktreeRoot } from '../auth.js';
+import { LANGUAGE_MAP } from '../types.js';
 
 /**
  * Parse "What's New" sections from play-store-*.md metadata files.
  * Returns release notes keyed by Google Play locale.
  */
 function loadReleaseNotesFromMetadata(): Array<{ language: string; text: string }> {
-  const { LANGUAGE_MAP } = require('../types.js');
   const root = getWorktreeRoot();
   const metadataDir = join(root, 'l10n', 'metadata', 'google');
   const notes: Array<{ language: string; text: string }> = [];
 
-  const { readdirSync } = require('fs');
   const files = readdirSync(metadataDir).filter(
     (f: string) => f.startsWith('play-store-') && f.endsWith('.md')
   );
