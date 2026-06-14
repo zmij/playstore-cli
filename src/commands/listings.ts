@@ -87,7 +87,7 @@ export function registerListingsCommands(program: Command): void {
     .option('--lang <language>', 'Update specific language')
     .option(
       '--field <field>',
-      'Update specific field only (title, short_description, full_description, promo_video)'
+      'Highlight a specific field in the diff output (title, short_description, full_description, promo_video). All fields from YAML are always sent to Play to avoid wiping other fields (the API has PUT semantics).'
     )
     .option('--dry-run', 'Show what would be updated without making changes')
     .option('--key-file <path>', 'Path to service account key file')
@@ -100,6 +100,27 @@ export function registerListingsCommands(program: Command): void {
         if (!options.all && !options.lang) {
           console.error(chalk.red('Please specify --all or --lang <language>'));
           process.exit(1);
+        }
+
+        const validFields = ['title', 'short_description', 'full_description', 'promo_video'];
+        if (options.field && !validFields.includes(options.field)) {
+          console.error(
+            chalk.red(
+              `Unknown --field "${options.field}". Valid: ${validFields.join(', ')}`
+            )
+          );
+          process.exit(1);
+        }
+
+        if (options.field) {
+          console.log(
+            chalk.yellow(
+              `Note: --field ${options.field} only highlights that field in the diff output. ` +
+                `Play's listings.update API is PUT semantics, so all four fields from the YAML ` +
+                `are always sent together (otherwise the omitted fields get wiped).`
+            )
+          );
+          console.log('');
         }
 
         const client = createClient(options.keyFile);
@@ -131,6 +152,9 @@ export function registerListingsCommands(program: Command): void {
         let updated = 0;
         let errors = 0;
 
+        const highlight = (field: string, body: string): string =>
+          options.field === field ? chalk.cyan(body) : body;
+
         for (const file of files) {
           const shortLang = basename(file, '.yaml');
           const locale = LANGUAGE_MAP[shortLang] || shortLang;
@@ -142,7 +166,10 @@ export function registerListingsCommands(program: Command): void {
 
             console.log(`${chalk.bold(shortLang)} (${locale}):`);
 
-            // Build update data based on field option
+            // Always send every field that the YAML declares. Play's
+            // listings.update API is PUT semantics: any field we omit
+            // gets wiped on the server. The --field option is a display
+            // filter only — see the warning printed above.
             const updateData: Partial<{
               title: string;
               shortDescription: string;
@@ -150,37 +177,40 @@ export function registerListingsCommands(program: Command): void {
               video: string;
             }> = {};
 
-            if (!options.field || options.field === 'title') {
-              if (metadata.title) {
-                updateData.title = metadata.title;
-                console.log(`  Title: ${metadata.title}`);
-              }
+            if (metadata.title) {
+              updateData.title = metadata.title;
+              console.log(highlight('title', `  Title: ${metadata.title}`));
             }
 
-            if (!options.field || options.field === 'short_description') {
-              if (metadata.short_description) {
-                updateData.shortDescription = metadata.short_description;
-                console.log(`  Short: ${metadata.short_description.substring(0, 40)}...`);
-              }
+            if (metadata.short_description) {
+              updateData.shortDescription = metadata.short_description;
+              console.log(
+                highlight(
+                  'short_description',
+                  `  Short: ${metadata.short_description.substring(0, 40)}...`
+                )
+              );
             }
 
-            if (!options.field || options.field === 'full_description') {
-              if (metadata.full_description) {
-                updateData.fullDescription = metadata.full_description;
-                console.log(`  Full: ${metadata.full_description.substring(0, 40)}...`);
-              }
+            if (metadata.full_description) {
+              updateData.fullDescription = metadata.full_description;
+              console.log(
+                highlight(
+                  'full_description',
+                  `  Full: ${metadata.full_description.substring(0, 40)}...`
+                )
+              );
             }
 
-            if (!options.field || options.field === 'promo_video') {
-              // Send the field even when empty — that lets us clear a video by
-              // blanking the YAML. `--field promo_video` with an empty YAML
-              // value is also the supported "remove video" path.
-              if (metadata.promo_video !== undefined) {
-                updateData.video = metadata.promo_video;
-                console.log(
+            if (metadata.promo_video !== undefined) {
+              // Sending an empty string clears the field on Play.
+              updateData.video = metadata.promo_video;
+              console.log(
+                highlight(
+                  'promo_video',
                   `  Video: ${metadata.promo_video || chalk.dim('(cleared)')}`
-                );
-              }
+                )
+              );
             }
 
             if (Object.keys(updateData).length === 0) {
