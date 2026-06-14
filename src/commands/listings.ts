@@ -70,6 +70,7 @@ export function registerListingsCommands(program: Command): void {
         console.log(listing.shortDescription);
         console.log(`\nFull Description (${listing.fullDescription.length}/4000 chars):`);
         console.log(listing.fullDescription);
+        console.log(`\nPromo Video: ${listing.video || chalk.dim('(none)')}`);
 
         await client.deleteEdit();
       } catch (error) {
@@ -86,7 +87,7 @@ export function registerListingsCommands(program: Command): void {
     .option('--lang <language>', 'Update specific language')
     .option(
       '--field <field>',
-      'Update specific field only (title, short_description, full_description)'
+      'Update specific field only (title, short_description, full_description, promo_video)'
     )
     .option('--dry-run', 'Show what would be updated without making changes')
     .option('--key-file <path>', 'Path to service account key file')
@@ -146,6 +147,7 @@ export function registerListingsCommands(program: Command): void {
               title: string;
               shortDescription: string;
               fullDescription: string;
+              video: string;
             }> = {};
 
             if (!options.field || options.field === 'title') {
@@ -166,6 +168,18 @@ export function registerListingsCommands(program: Command): void {
               if (metadata.full_description) {
                 updateData.fullDescription = metadata.full_description;
                 console.log(`  Full: ${metadata.full_description.substring(0, 40)}...`);
+              }
+            }
+
+            if (!options.field || options.field === 'promo_video') {
+              // Send the field even when empty — that lets us clear a video by
+              // blanking the YAML. `--field promo_video` with an empty YAML
+              // value is also the supported "remove video" path.
+              if (metadata.promo_video !== undefined) {
+                updateData.video = metadata.promo_video;
+                console.log(
+                  `  Video: ${metadata.promo_video || chalk.dim('(cleared)')}`
+                );
               }
             }
 
@@ -251,6 +265,7 @@ export function registerListingsCommands(program: Command): void {
             title: listing.title,
             short_description: listing.shortDescription,
             full_description: listing.fullDescription,
+            promo_video: listing.video,
           };
 
           const yaml = stringifyYaml(metadata, {

@@ -212,6 +212,7 @@ export class PlayStoreClient {
       title: l.title || '',
       shortDescription: l.shortDescription || '',
       fullDescription: l.fullDescription || '',
+      video: l.video || '',
     }));
   }
 
@@ -234,6 +235,7 @@ export class PlayStoreClient {
         title: l.title || '',
         shortDescription: l.shortDescription || '',
         fullDescription: l.fullDescription || '',
+        video: l.video || '',
       };
     } catch {
       return null;
@@ -249,6 +251,7 @@ export class PlayStoreClient {
       title: string;
       shortDescription: string;
       fullDescription: string;
+      video: string;
     }>
   ): Promise<void> {
     const editId = await this.ensureEdit();

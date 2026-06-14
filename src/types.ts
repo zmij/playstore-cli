@@ -20,6 +20,13 @@ export interface ListingMetadata {
   title: string;
   short_description: string;
   full_description: string;
+  /**
+   * YouTube URL for the listing's promo video. The Play Store accepts
+   * one video per locale, supplied as a YouTube URL — Play embeds it on
+   * the listing alongside the screenshots. Empty string = no video set.
+   * Example: `https://www.youtube.com/watch?v=dQw4w9WgXcQ`
+   */
+  promo_video: string;
 }
 
 // ============================================================================
@@ -146,6 +153,8 @@ export interface Listing {
   title: string;
   shortDescription: string;
   fullDescription: string;
+  /** YouTube URL for the promo video. Empty string when no video is set. */
+  video: string;
 }
 
 // ============================================================================
@@ -155,7 +164,7 @@ export interface Listing {
 export interface ListingsUpdateOptions {
   all?: boolean;
   lang?: string;
-  field?: 'whats_new' | 'title' | 'short_description' | 'full_description';
+  field?: 'whats_new' | 'title' | 'short_description' | 'full_description' | 'promo_video';
   dryRun?: boolean;
   keyFile?: string;
 }
