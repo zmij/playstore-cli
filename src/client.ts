@@ -11,6 +11,10 @@ import { getAuthContext, type AuthContext } from './auth.js';
 import type { Track, Listing } from './types.js';
 
 type AndroidPublisher = androidpublisher_v3.Androidpublisher;
+type Schema$OneTimeProduct = androidpublisher_v3.Schema$OneTimeProduct;
+type Schema$OneTimeProductOffer = androidpublisher_v3.Schema$OneTimeProductOffer;
+type Schema$Subscription = androidpublisher_v3.Schema$Subscription;
+type Schema$SubscriptionOffer = androidpublisher_v3.Schema$SubscriptionOffer;
 
 /**
  * Google Play Developer API Client
@@ -378,6 +382,133 @@ export class PlayStoreClient {
       contactWebsite: response.data.contactWebsite || undefined,
       defaultLanguage: response.data.defaultLanguage || undefined,
     };
+  }
+
+  // ============================================================================
+  // One-time products (the new monetization API)
+  // ============================================================================
+  //
+  // Operations go DIRECTLY against the live package — no edit session,
+  // no commit step (unlike listings / tracks / images). Don't call
+  // ensureEdit() here or every read leaks an unwanted edit on the account.
+  //
+  // The legacy `inappproducts` API (defaultPrice + flat prices map + flat
+  // listings map) is deprecated for newer accounts — calls fail with 403
+  // "Please migrate to the new publishing API." Use
+  // `monetization.onetimeproducts` exclusively.
+
+  /** List every one-time product in the app. Paginated; we collect
+   *  across pages so callers see one flat array. */
+  async listOneTimeProducts(): Promise<Schema$OneTimeProduct[]> {
+    const out: Schema$OneTimeProduct[] = [];
+    let pageToken: string | undefined;
+    do {
+      const res = await this.publisher.monetization.onetimeproducts.list({
+        packageName: this.packageName,
+        pageToken,
+      });
+      out.push(...(res.data.oneTimeProducts ?? []));
+      pageToken = res.data.nextPageToken ?? undefined;
+    } while (pageToken);
+    return out;
+  }
+
+  async getOneTimeProduct(productId: string): Promise<Schema$OneTimeProduct | null> {
+    try {
+      const res = await this.publisher.monetization.onetimeproducts.get({
+        packageName: this.packageName,
+        productId,
+      });
+      return res.data;
+    } catch {
+      return null;
+    }
+  }
+
+  /** List every offer attached to one-time products. The List endpoint
+   *  accepts productId='-' AND purchaseOptionId='-' as wildcards, which
+   *  is how we pull the full picture in one round-trip. Returns empty
+   *  array on 404 / no offers, never throws. */
+  async listOneTimeProductOffers(
+    productId: string = '-',
+    purchaseOptionId: string = '-',
+  ): Promise<Schema$OneTimeProductOffer[]> {
+    const out: Schema$OneTimeProductOffer[] = [];
+    let pageToken: string | undefined;
+    try {
+      do {
+        const res = await this.publisher.monetization.onetimeproducts.purchaseOptions.offers.list({
+          packageName: this.packageName,
+          productId,
+          purchaseOptionId,
+          pageToken,
+        });
+        out.push(...(res.data.oneTimeProductOffers ?? []));
+        pageToken = res.data.nextPageToken ?? undefined;
+      } while (pageToken);
+    } catch {
+      // No offers attached, or product doesn't exist — fine for the
+      // caller, which treats this as "no offers".
+    }
+    return out;
+  }
+
+  // ============================================================================
+  // Subscriptions (new monetization API)
+  // ============================================================================
+  //
+  // Subscriptions have nested resources: each Subscription carries its
+  // basePlans inline, but Offers are a sub-resource we list separately. The
+  // List endpoint accepts productId='-' and basePlanId='-' as wildcards
+  // (single round-trip for all offers under the app), which is what we use
+  // when callers want the full picture.
+
+  async listSubscriptions(): Promise<Schema$Subscription[]> {
+    const out: Schema$Subscription[] = [];
+    let pageToken: string | undefined;
+    do {
+      const res = await this.publisher.monetization.subscriptions.list({
+        packageName: this.packageName,
+        pageToken,
+      });
+      out.push(...(res.data.subscriptions ?? []));
+      pageToken = res.data.nextPageToken ?? undefined;
+    } while (pageToken);
+    return out;
+  }
+
+  async getSubscription(productId: string): Promise<Schema$Subscription | null> {
+    try {
+      const res = await this.publisher.monetization.subscriptions.get({
+        packageName: this.packageName,
+        productId,
+      });
+      return res.data;
+    } catch {
+      return null;
+    }
+  }
+
+  /** List every subscription offer for one product (productId='-' for
+   *  the whole app; basePlanId='-' for all base plans). The Offers
+   *  list endpoint requires basePlanId='-' when productId='-'. */
+  async listSubscriptionOffers(
+    productId: string,
+    basePlanId: string = '-',
+  ): Promise<Schema$SubscriptionOffer[]> {
+    const out: Schema$SubscriptionOffer[] = [];
+    let pageToken: string | undefined;
+    do {
+      const res = await this.publisher.monetization.subscriptions.basePlans.offers.list({
+        packageName: this.packageName,
+        productId,
+        basePlanId,
+        pageToken,
+      });
+      out.push(...(res.data.subscriptionOffers ?? []));
+      pageToken = res.data.nextPageToken ?? undefined;
+    } while (pageToken);
+    return out;
   }
 }
 
