@@ -606,6 +606,59 @@ export class PlayStoreClient {
     });
   }
 
+  /** Migrate existing subscribers on a base plan to whatever its
+   *  current price is, region by region. Use AFTER `iap sync` has
+   *  set the new price — patching the price only affects new
+   *  subscribers; this call moves the existing cohort.
+   *
+   *  Each entry's `oldestAllowedPriceVersionTime` is a cutoff: anyone
+   *  signed up before that time gets migrated. Pass the current
+   *  instant ("now") to migrate everyone on the old price; an earlier
+   *  cutoff lets you preserve a recent cohort if you've done a phased
+   *  rollout.
+   *
+   *  `priceIncreaseType` is optional:
+   *   * PRICE_INCREASE_TYPE_OPT_IN — user must explicitly accept;
+   *     declines cancel the subscription at expiry.
+   *   * PRICE_INCREASE_TYPE_OPT_OUT — applied automatically; user can
+   *     cancel. (Required for price decreases? No — decreases are
+   *     always auto-applied.)
+   *   Omitted = Play's default (opt-in for increases).
+   *
+   *  The endpoint accepts cross-sub batches via productId='-' on the
+   *  URL; we expose that by letting the caller batch one or many
+   *  base-plan migrations per call. */
+  async batchMigrateBasePlanPrices(
+    productId: string,
+    regionsVersion: string,
+    migrations: Array<{
+      basePlanId: string;
+      regionalPriceMigrations: Array<{
+        regionCode: string;
+        oldestAllowedPriceVersionTime: string;
+        priceIncreaseType?: string;
+      }>;
+    }>,
+  ): Promise<void> {
+    if (migrations.length === 0) return;
+    await this.publisher.monetization.subscriptions.basePlans.batchMigratePrices({
+      packageName: this.packageName,
+      productId,
+      requestBody: {
+        requests: migrations.map((m) => ({
+          packageName: this.packageName,
+          // The wire's productId on the per-request body is the
+          // PARENT sub of this base plan. When the URL productId is
+          // '-' you can mix subs; otherwise it must match.
+          productId,
+          basePlanId: m.basePlanId,
+          regionsVersion: { version: regionsVersion },
+          regionalPriceMigrations: m.regionalPriceMigrations,
+        })),
+      },
+    });
+  }
+
   /** Bulk update purchase-option states. The only state-transition
    *  endpoint Play exposes for one-time purchase options — there's no
    *  single activate / deactivate. Pass an array of `{ purchase_option_id,

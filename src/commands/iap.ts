@@ -1045,6 +1045,136 @@ export function registerIapCommands(program: Command): void {
       }
     });
 
+  // ---- migrate-prices ---------------------------------------------------
+  //
+  // After `iap sync` sets a new base-plan price in YAML and pushes it,
+  // existing subscribers stay on the OLD price unless explicitly
+  // migrated. This command fires the migration via
+  // `monetization.subscriptions.basePlans.batchMigratePrices`.
+  //
+  // Scope per invocation: ONE subscription + ONE base plan. We don't
+  // auto-fan-out across all subs because price migrations have user
+  // impact (billing change notifications, opt-in flows) and the
+  // operator should be in control of which plan is being touched at
+  // any given moment.
+  //
+  // The `--cutoff` flag is the "oldest allowed price version time"
+  // for the regional configs being migrated. Default = current
+  // instant ("now"), which means EVERY existing cohort gets pulled
+  // forward to the current price. Pass an earlier ISO timestamp to
+  // preserve a more-recent cohort (useful for phased rollouts).
+  //
+  // `--increase-type` maps directly onto Play's `priceIncreaseType`:
+  // omit for the default (typically opt-in for increases), or set to
+  // PRICE_INCREASE_TYPE_OPT_IN / PRICE_INCREASE_TYPE_OPT_OUT
+  // explicitly.
+  //
+  // The command does NOT compare YAML vs live — operators run it
+  // *after* they've already pushed the new price via `iap sync`.
+  // Adding a "detect drift and migrate" mode would require us to also
+  // know which cohort cutoff to use, which the operator can answer
+  // but the script can't.
+
+  iap
+    .command('migrate-prices')
+    .description('Migrate existing subscribers on a base plan to its current price (regions opt-in or opt-out per cohort cutoff)')
+    .requiredOption('--product-id <productId>', 'Subscription product ID (e.g. lazy_sudoku_premium)')
+    .requiredOption('--base-plan-id <basePlanId>', 'Base plan ID under that subscription')
+    .requiredOption('--regions <regions>', 'Comma-separated ISO-2 region codes, or "all" for every region currently priced on the plan')
+    .option('--cutoff <isoTimestamp>', 'Migrate cohorts created strictly BEFORE this time (ISO 8601, e.g. 2026-01-01T00:00:00Z). Defaults to "now".')
+    .option('--increase-type <type>', 'PRICE_INCREASE_TYPE_OPT_IN / PRICE_INCREASE_TYPE_OPT_OUT. Omit for Play default.')
+    .option('--regions-version <version>', 'Override Play regions catalog version')
+    .option('--dry-run', 'Report what would migrate without firing the call')
+    .option('--key-file <path>', 'Path to service account key file')
+    .action(async (options) => {
+      try {
+        const client = createClient(options.keyFile);
+
+        // Resolve cutoff. Wire wants ISO with millisecond precision; we
+        // pass through user value verbatim if given, otherwise `now`.
+        const cutoff = options.cutoff ?? new Date().toISOString();
+        // Sanity check the cutoff parses as a valid date — typos here
+        // are easy and the API error is cryptic.
+        if (isNaN(Date.parse(cutoff))) {
+          console.error(chalk.red(`Invalid --cutoff: ${cutoff} (must be ISO 8601)`));
+          process.exit(1);
+        }
+
+        // Resolve regions list. "all" means every region currently on
+        // the plan's regional_configs.
+        const liveSub = await client.getSubscription(options.productId);
+        if (!liveSub) {
+          console.error(chalk.red(`Subscription not found on Play: ${options.productId}`));
+          process.exit(1);
+        }
+        const livePlan = (liveSub.basePlans ?? []).find((bp) => bp.basePlanId === options.basePlanId);
+        if (!livePlan) {
+          console.error(chalk.red(`Base plan not found on ${options.productId}: ${options.basePlanId}`));
+          process.exit(1);
+        }
+        const allPricedRegions = (livePlan.regionalConfigs ?? [])
+          .filter((rc) => rc.regionCode && rc.price)
+          .map((rc) => rc.regionCode!);
+
+        let regions: string[];
+        if (options.regions === 'all') {
+          regions = allPricedRegions;
+        } else {
+          regions = (options.regions as string).split(',').map((r) => r.trim()).filter(Boolean);
+          // Warn (not fail) on regions that aren't currently priced —
+          // the API will reject them, but the error message is more
+          // useful when we surface it ourselves.
+          const unknown = regions.filter((r) => !allPricedRegions.includes(r));
+          if (unknown.length > 0) {
+            console.error(chalk.yellow(`Warning: these regions aren't priced on ${options.productId}/${options.basePlanId} — Play will likely reject them: ${unknown.join(', ')}`));
+          }
+        }
+        if (regions.length === 0) {
+          console.error(chalk.red('No regions to migrate.'));
+          process.exit(1);
+        }
+
+        // Resolve regionsVersion — same dance as `iap sync`.
+        let regionsVersion = options.regionsVersion as string | undefined;
+        if (!regionsVersion) {
+          // Subscriptions don't carry it; pull from a one-time product.
+          const products = await client.listOneTimeProducts();
+          regionsVersion = (products[0]?.regionsVersion as any)?.version;
+        }
+        if (!regionsVersion) {
+          console.error(chalk.red('Could not resolve a regionsVersion. Pass --regions-version <version>.'));
+          process.exit(1);
+        }
+
+        const regionalPriceMigrations = regions.map((region) => ({
+          regionCode: region,
+          oldestAllowedPriceVersionTime: cutoff,
+          ...(options.increaseType && { priceIncreaseType: options.increaseType }),
+        }));
+
+        console.log(chalk.bold(`\nMigration plan:`));
+        console.log(`  product:        ${chalk.cyan(options.productId)}`);
+        console.log(`  base plan:      ${chalk.cyan(options.basePlanId)}`);
+        console.log(`  regions:        ${regions.length} (${regions.slice(0, 8).join(', ')}${regions.length > 8 ? '…' : ''})`);
+        console.log(`  cohort cutoff:  ${cutoff}`);
+        console.log(`  increase type:  ${options.increaseType ?? chalk.gray('(Play default — typically opt-in for increases)')}`);
+        console.log(`  regions ver:    ${regionsVersion}`);
+
+        if (options.dryRun) {
+          console.log(chalk.yellow('\n[dry-run] no API call fired.'));
+          return;
+        }
+
+        await client.batchMigrateBasePlanPrices(options.productId, regionsVersion, [
+          { basePlanId: options.basePlanId, regionalPriceMigrations },
+        ]);
+        console.log(chalk.green(`\n✓ Migration triggered. Affected subscribers receive Play's standard notification flow.`));
+      } catch (error) {
+        console.error(chalk.red('Error:'), error instanceof Error ? error.message : error);
+        process.exit(1);
+      }
+    });
+
   // ---- pull -------------------------------------------------------------
   //
   // Additive merge of live Play state into the committed YAML, the
