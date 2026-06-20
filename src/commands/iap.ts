@@ -1348,34 +1348,132 @@ function mergeYamlArrayById<T>(
 // now `local-only / live-only` is enough to drive `iap pull` vs `iap
 // sync` decisions.
 
+/**
+ * Path segment → id-field lookup. Used by the deep-diff to match
+ * array elements by identity instead of position. Anything not in
+ * this table is treated as positional (e.g. phases on a sub offer,
+ * benefits on a listing — both are ordered semantically by Play).
+ */
+const ARRAY_ID_FIELDS: Record<string, string> = {
+  purchase_options: 'purchase_option_id',
+  base_plans: 'base_plan_id',
+  regional_configs: 'region',
+  offers: 'offer_id',
+};
+
+type DiffCategory = 'local-only' | 'live-only' | 'mismatch';
+interface DiffRow {
+  category: DiffCategory;
+  path: string;
+  yaml?: any;
+  live?: any;
+}
+
+/** Recursively diff two normalised values. Both come from
+ *  `fetchLiveIapState` / a parsed YAML of `PlayIAPMetadata`, so the
+ *  shapes are isomorphic when nothing's diverged. */
+function deepDiff(yamlVal: any, liveVal: any, path: string, segName: string, out: DiffRow[]): void {
+  // Treat null and undefined as the same "missing" value — the wire
+  // omits null fields, the YAML may have null in some places.
+  const yMissing = yamlVal === undefined || yamlVal === null;
+  const lMissing = liveVal === undefined || liveVal === null;
+  if (yMissing && lMissing) return;
+  if (yMissing) {
+    out.push({ category: 'live-only', path, live: liveVal });
+    return;
+  }
+  if (lMissing) {
+    out.push({ category: 'local-only', path, yaml: yamlVal });
+    return;
+  }
+
+  const yArr = Array.isArray(yamlVal);
+  const lArr = Array.isArray(liveVal);
+  if (yArr !== lArr) {
+    out.push({ category: 'mismatch', path, yaml: yamlVal, live: liveVal });
+    return;
+  }
+
+  if (yArr && lArr) {
+    const idField = ARRAY_ID_FIELDS[segName];
+    if (idField) {
+      // Identity-matched: build maps by id, recurse into the union.
+      const yMap = new Map<string, any>();
+      const lMap = new Map<string, any>();
+      for (const item of yamlVal as any[]) {
+        const k = item?.[idField];
+        if (k != null) yMap.set(String(k), item);
+      }
+      for (const item of liveVal as any[]) {
+        const k = item?.[idField];
+        if (k != null) lMap.set(String(k), item);
+      }
+      const ids = new Set([...yMap.keys(), ...lMap.keys()]);
+      for (const id of [...ids].sort()) {
+        deepDiff(yMap.get(id), lMap.get(id), `${path}/${id}`, idField, out);
+      }
+    } else {
+      // Positional match (e.g. phases, benefits).
+      const max = Math.max(yamlVal.length, liveVal.length);
+      for (let i = 0; i < max; i++) {
+        deepDiff(yamlVal[i], liveVal[i], `${path}[${i}]`, `${segName}[]`, out);
+      }
+    }
+    return;
+  }
+
+  const yObj = typeof yamlVal === 'object';
+  const lObj = typeof liveVal === 'object';
+  if (yObj !== lObj) {
+    out.push({ category: 'mismatch', path, yaml: yamlVal, live: liveVal });
+    return;
+  }
+  if (yObj && lObj) {
+    const keys = new Set([...Object.keys(yamlVal), ...Object.keys(liveVal)]);
+    for (const k of [...keys].sort()) {
+      deepDiff(yamlVal[k], liveVal[k], `${path}/${k}`, k, out);
+    }
+    return;
+  }
+
+  // Scalars — direct compare.
+  if (yamlVal !== liveVal) {
+    out.push({ category: 'mismatch', path, yaml: yamlVal, live: liveVal });
+  }
+}
+
+function formatScalarForDiff(v: any): string {
+  if (v === undefined) return chalk.gray('(missing)');
+  if (typeof v === 'string') return v.length > 60 ? `${v.slice(0, 57)}…` : v;
+  if (typeof v === 'object') return JSON.stringify(v).slice(0, 60);
+  return String(v);
+}
+
 function diffPlayIapMetadata(
   yamlState: PlayIAPMetadata,
   live: PlayIAPMetadata,
   scopedProductId: string | undefined,
 ): void {
   const matchesScope = (id: string) => !scopedProductId || scopedProductId === id;
-  const rows: Array<{ category: string; path: string }> = [];
+  const rows: DiffRow[] = [];
 
-  const yamlPurchaseIds = new Set(Object.keys(yamlState.purchases ?? {}));
-  const livePurchaseIds = new Set(Object.keys(live.purchases ?? {}));
-  for (const id of yamlPurchaseIds) {
+  // Top-level product-id walk — emit local-only / live-only on
+  // missing products; recurse into matched products for field-level
+  // mismatches.
+  const yamlPurchases = yamlState.purchases ?? {};
+  const livePurchases = live.purchases ?? {};
+  const purchaseIds = new Set([...Object.keys(yamlPurchases), ...Object.keys(livePurchases)]);
+  for (const id of purchaseIds) {
     if (!matchesScope(id)) continue;
-    if (!livePurchaseIds.has(id)) rows.push({ category: 'local-only', path: `purchases/${id}` });
-  }
-  for (const id of livePurchaseIds) {
-    if (!matchesScope(id)) continue;
-    if (!yamlPurchaseIds.has(id)) rows.push({ category: 'live-only', path: `purchases/${id}` });
+    deepDiff(yamlPurchases[id], livePurchases[id], `purchases/${id}`, 'purchase_option_id', rows);
   }
 
-  const yamlSubIds = new Set(Object.keys(yamlState.subscriptions ?? {}));
-  const liveSubIds = new Set(Object.keys(live.subscriptions ?? {}));
-  for (const id of yamlSubIds) {
+  const yamlSubs = yamlState.subscriptions ?? {};
+  const liveSubs = live.subscriptions ?? {};
+  const subIds = new Set([...Object.keys(yamlSubs), ...Object.keys(liveSubs)]);
+  for (const id of subIds) {
     if (!matchesScope(id)) continue;
-    if (!liveSubIds.has(id)) rows.push({ category: 'local-only', path: `subscriptions/${id}` });
-  }
-  for (const id of liveSubIds) {
-    if (!matchesScope(id)) continue;
-    if (!yamlSubIds.has(id)) rows.push({ category: 'live-only', path: `subscriptions/${id}` });
+    deepDiff(yamlSubs[id], liveSubs[id], `subscriptions/${id}`, 'base_plan_id', rows);
   }
 
   if (rows.length === 0) {
@@ -1385,12 +1483,21 @@ function diffPlayIapMetadata(
 
   rows.sort((a, b) => a.path.localeCompare(b.path));
   for (const row of rows) {
-    const colour = row.category === 'local-only' ? chalk.yellow : chalk.cyan;
-    console.log(`  ${colour(row.category.padEnd(11))} ${row.path}`);
+    const colour = row.category === 'local-only' ? chalk.yellow
+      : row.category === 'live-only' ? chalk.cyan
+        : chalk.magenta;
+    if (row.category === 'mismatch') {
+      console.log(`  ${colour(row.category.padEnd(11))} ${row.path}`);
+      console.log(`              ${chalk.gray('yaml:')} ${formatScalarForDiff(row.yaml)}`);
+      console.log(`              ${chalk.gray('live:')} ${formatScalarForDiff(row.live)}`);
+    } else {
+      console.log(`  ${colour(row.category.padEnd(11))} ${row.path}`);
+    }
   }
   console.log(chalk.bold(`\n${rows.length} divergence(s).`));
-  console.log(chalk.gray('  • local-only → run `iap sync` to push it'));
+  console.log(chalk.gray('  • local-only → run `iap sync` (or `iap create` if the whole product is new) to push it'));
   console.log(chalk.gray('  • live-only  → run `iap pull` to absorb it'));
+  console.log(chalk.gray('  • mismatch   → decide manually: `iap sync` overwrites live, `iap pull` does not overwrite local'));
 }
 
 // ============================================================================
