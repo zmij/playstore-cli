@@ -519,6 +519,128 @@ export class PlayStoreClient {
   }
 
   // ============================================================================
+  // State lifecycle (activate / deactivate)
+  // ============================================================================
+  //
+  // patch endpoints leave state output-only — Play preserves whatever
+  // was there. To actually flip a base plan / offer / purchase option
+  // between active and inactive you need the dedicated endpoints below.
+  //
+  // Cross-cutting quirk: one-time PURCHASE OPTIONS don't have
+  // individual activate / deactivate — Play only exposes
+  // batchUpdateStates for them. We surface that as `setOneTimePurchaseOptionStates`
+  // taking an array of (purchaseOptionId, state) pairs. Single-item
+  // calls work fine.
+
+  async activateBasePlan(productId: string, basePlanId: string): Promise<void> {
+    await this.publisher.monetization.subscriptions.basePlans.activate({
+      packageName: this.packageName,
+      productId,
+      basePlanId,
+      requestBody: {},
+    });
+  }
+
+  async deactivateBasePlan(productId: string, basePlanId: string): Promise<void> {
+    await this.publisher.monetization.subscriptions.basePlans.deactivate({
+      packageName: this.packageName,
+      productId,
+      basePlanId,
+      requestBody: {},
+    });
+  }
+
+  async activateSubscriptionOffer(
+    productId: string,
+    basePlanId: string,
+    offerId: string,
+  ): Promise<void> {
+    await this.publisher.monetization.subscriptions.basePlans.offers.activate({
+      packageName: this.packageName,
+      productId,
+      basePlanId,
+      offerId,
+      requestBody: {},
+    });
+  }
+
+  async deactivateSubscriptionOffer(
+    productId: string,
+    basePlanId: string,
+    offerId: string,
+  ): Promise<void> {
+    await this.publisher.monetization.subscriptions.basePlans.offers.deactivate({
+      packageName: this.packageName,
+      productId,
+      basePlanId,
+      offerId,
+      requestBody: {},
+    });
+  }
+
+  async activateOneTimeOffer(
+    productId: string,
+    purchaseOptionId: string,
+    offerId: string,
+  ): Promise<void> {
+    await this.publisher.monetization.onetimeproducts.purchaseOptions.offers.activate({
+      packageName: this.packageName,
+      productId,
+      purchaseOptionId,
+      offerId,
+      requestBody: {},
+    });
+  }
+
+  async deactivateOneTimeOffer(
+    productId: string,
+    purchaseOptionId: string,
+    offerId: string,
+  ): Promise<void> {
+    await this.publisher.monetization.onetimeproducts.purchaseOptions.offers.deactivate({
+      packageName: this.packageName,
+      productId,
+      purchaseOptionId,
+      offerId,
+      requestBody: {},
+    });
+  }
+
+  /** Bulk update purchase-option states. The only state-transition
+   *  endpoint Play exposes for one-time purchase options — there's no
+   *  single activate / deactivate. Pass an array of `{ purchase_option_id,
+   *  state }`. Each batch element nests the full activate/deactivate
+   *  request (with packageName + productId + purchaseOptionId
+   *  duplicated) under the discriminator key. */
+  async setOneTimePurchaseOptionStates(
+    productId: string,
+    transitions: Array<{ purchaseOptionId: string; state: 'ACTIVE' | 'INACTIVE' }>,
+  ): Promise<void> {
+    if (transitions.length === 0) return;
+    await this.publisher.monetization.onetimeproducts.purchaseOptions.batchUpdateStates({
+      packageName: this.packageName,
+      productId,
+      requestBody: {
+        requests: transitions.map((t) => (t.state === 'ACTIVE'
+          ? {
+            activatePurchaseOptionRequest: {
+              packageName: this.packageName,
+              productId,
+              purchaseOptionId: t.purchaseOptionId,
+            },
+          }
+          : {
+            deactivatePurchaseOptionRequest: {
+              packageName: this.packageName,
+              productId,
+              purchaseOptionId: t.purchaseOptionId,
+            },
+          })),
+      },
+    });
+  }
+
+  // ============================================================================
   // Subscriptions (new monetization API)
   // ============================================================================
   //

@@ -842,6 +842,209 @@ export function registerIapCommands(program: Command): void {
       }
     });
 
+  // ---- state ------------------------------------------------------------
+  //
+  // Reconciles the lifecycle state of base plans, subscription
+  // offers, purchase options, and one-time offers against what the
+  // YAML claims they should be. The `state` field on each is
+  // output-only on `iap sync`'s patch — this command is the only way
+  // to flip the live state from CLI.
+  //
+  // Quirks captured:
+  //  * One-time PURCHASE OPTIONS don't have a single activate /
+  //    deactivate — Play exposes only `batchUpdateStates`. The client
+  //    method handles that; the command surfaces it as the same
+  //    semantics as everything else.
+  //  * `draft` is a starting state, not a target — newly-created
+  //    resources land there and need an activate to ship. We never
+  //    transition TO draft from CLI; if your YAML says `draft` we
+  //    treat that as "leave alone".
+  //  * `inactive` doesn't refund anyone — Play keeps existing
+  //    subscribers entitled but hides the SKU from new purchasers.
+
+  iap
+    .command('state')
+    .description('Reconcile live lifecycle state with YAML (activate/deactivate base plans, purchase options, offers)')
+    .option('--input <path>', 'YAML file to read (defaults to l10n/metadata/play/iap.yaml)')
+    .option('--product-id <productId>', 'Reconcile a single product only')
+    .option('--dry-run', 'Report transitions without firing the calls')
+    .option('--key-file <path>', 'Path to service account key file')
+    .action(async (options) => {
+      try {
+        const { readFileSync, existsSync } = await import('fs');
+        const { join } = await import('path');
+        const { parse: parseYaml } = await import('yaml');
+        const { getWorktreeRoot } = await import('../auth.js');
+
+        const yamlPath = options.input
+          ?? join(getWorktreeRoot(), 'l10n', 'metadata', 'play', 'iap.yaml');
+        if (!existsSync(yamlPath)) {
+          console.error(chalk.red(`IAP metadata file not found: ${yamlPath}`));
+          process.exit(1);
+        }
+
+        const yamlState = parseYaml(readFileSync(yamlPath, 'utf-8')) as PlayIAPMetadata;
+        const client = createClient(options.keyFile);
+        const scope = options.productId as string | undefined;
+        const dry = options.dryRun ?? false;
+
+        // Compare current vs desired state. We only act when both are
+        // unambiguous (active <-> inactive); `draft` means "don't
+        // touch", same for missing entries.
+        type Transition =
+          | { kind: 'basePlan'; productId: string; basePlanId: string; to: 'ACTIVE' | 'INACTIVE' }
+          | { kind: 'subOffer'; productId: string; basePlanId: string; offerId: string; to: 'ACTIVE' | 'INACTIVE' }
+          | { kind: 'purchaseOption'; productId: string; purchaseOptionId: string; to: 'ACTIVE' | 'INACTIVE' }
+          | { kind: 'oneTimeOffer'; productId: string; purchaseOptionId: string; offerId: string; to: 'ACTIVE' | 'INACTIVE' };
+        const txns: Transition[] = [];
+
+        const normaliseLiveState = (s: string | null | undefined): 'ACTIVE' | 'INACTIVE' | 'DRAFT' | undefined => {
+          if (!s) return undefined;
+          // Wire enums are upper-snake with a resource prefix
+          // (e.g. BASE_PLAN_STATE_ACTIVE). Strip prefix, normalise.
+          const tail = s.replace(/^[A-Z_]+STATE_/, '').replace(/^[A-Z_]+_STATE_/, '');
+          if (tail === 'ACTIVE' || tail === 'INACTIVE' || tail === 'DRAFT') return tail;
+          return undefined;
+        };
+        const desiredFromYaml = (s: string | undefined): 'ACTIVE' | 'INACTIVE' | undefined => {
+          if (!s) return undefined;
+          if (s === 'active') return 'ACTIVE';
+          if (s === 'inactive') return 'INACTIVE';
+          return undefined;
+        };
+
+        // --- subscriptions ---
+        for (const [productId, yamlSub] of Object.entries(yamlState.subscriptions ?? {})) {
+          if (scope && scope !== productId) continue;
+          const live = await client.getSubscription(productId);
+          if (!live) continue;
+          const livePlans = new Map((live.basePlans ?? []).map((bp) => [bp.basePlanId ?? '', bp]));
+          for (const yamlPlan of yamlSub.base_plans) {
+            const desired = desiredFromYaml(yamlPlan.state);
+            if (!desired) continue;
+            const livePlan = livePlans.get(yamlPlan.base_plan_id);
+            const liveState = normaliseLiveState(livePlan?.state);
+            if (livePlan && liveState && liveState !== desired && liveState !== 'DRAFT') {
+              txns.push({ kind: 'basePlan', productId, basePlanId: yamlPlan.base_plan_id, to: desired });
+            }
+          }
+          // sub offers — pull all live offers for this product once
+          const liveOffers = await client.listSubscriptionOffers(productId, '-');
+          const liveOfferMap = new Map(liveOffers.map((o) => [`${o.basePlanId}/${o.offerId}`, o]));
+          for (const yamlPlan of yamlSub.base_plans) {
+            for (const yamlOffer of yamlPlan.offers ?? []) {
+              const desired = desiredFromYaml(yamlOffer.state);
+              if (!desired) continue;
+              const live = liveOfferMap.get(`${yamlPlan.base_plan_id}/${yamlOffer.offer_id}`);
+              const liveState = normaliseLiveState(live?.state);
+              if (live && liveState && liveState !== desired && liveState !== 'DRAFT') {
+                txns.push({
+                  kind: 'subOffer', productId,
+                  basePlanId: yamlPlan.base_plan_id,
+                  offerId: yamlOffer.offer_id,
+                  to: desired,
+                });
+              }
+            }
+          }
+        }
+
+        // --- one-time products ---
+        for (const [productId, yamlProduct] of Object.entries(yamlState.purchases ?? {})) {
+          if (scope && scope !== productId) continue;
+          const live = await client.getOneTimeProduct(productId);
+          if (!live) continue;
+          const liveOptionMap = new Map((live.purchaseOptions ?? []).map((po) => [po.purchaseOptionId ?? '', po]));
+          for (const yamlOpt of yamlProduct.purchase_options) {
+            const desired = desiredFromYaml(yamlOpt.state);
+            if (!desired) continue;
+            const liveOpt = liveOptionMap.get(yamlOpt.purchase_option_id);
+            const liveState = normaliseLiveState(liveOpt?.state);
+            if (liveOpt && liveState && liveState !== desired && liveState !== 'DRAFT') {
+              txns.push({
+                kind: 'purchaseOption', productId,
+                purchaseOptionId: yamlOpt.purchase_option_id, to: desired,
+              });
+            }
+          }
+          // one-time offers — pull all live offers for this product
+          const liveOneTimeOffers = await client.listOneTimeProductOffers(productId, '-');
+          const liveOneTimeOfferMap = new Map(liveOneTimeOffers.map((o) => [`${o.purchaseOptionId}/${o.offerId}`, o]));
+          for (const yamlOpt of yamlProduct.purchase_options) {
+            for (const yamlOffer of yamlOpt.offers ?? []) {
+              const desired = desiredFromYaml(yamlOffer.state);
+              if (!desired) continue;
+              const live = liveOneTimeOfferMap.get(`${yamlOpt.purchase_option_id}/${yamlOffer.offer_id}`);
+              const liveState = normaliseLiveState(live?.state);
+              if (live && liveState && liveState !== desired && liveState !== 'DRAFT') {
+                txns.push({
+                  kind: 'oneTimeOffer', productId,
+                  purchaseOptionId: yamlOpt.purchase_option_id,
+                  offerId: yamlOffer.offer_id,
+                  to: desired,
+                });
+              }
+            }
+          }
+        }
+
+        if (txns.length === 0) {
+          console.log(chalk.gray('Live state already matches YAML — nothing to reconcile.'));
+          return;
+        }
+
+        // Batch the purchase-option transitions by product (the only
+        // path that requires batching). Everything else is per-item.
+        const purchaseOptionBatches = new Map<string, Array<{ purchaseOptionId: string; state: 'ACTIVE' | 'INACTIVE' }>>();
+        for (const t of txns) {
+          if (t.kind === 'purchaseOption') {
+            if (!purchaseOptionBatches.has(t.productId)) purchaseOptionBatches.set(t.productId, []);
+            purchaseOptionBatches.get(t.productId)!.push({ purchaseOptionId: t.purchaseOptionId, state: t.to });
+          }
+        }
+
+        for (const t of txns) {
+          const arrow = `→ ${t.to === 'ACTIVE' ? chalk.green('active') : chalk.yellow('inactive')}`;
+          const dryPrefix = dry ? chalk.gray('[dry-run] ') : '';
+          if (t.kind === 'basePlan') {
+            console.log(`  ${dryPrefix}base plan: ${t.productId}/${t.basePlanId} ${arrow}`);
+            if (!dry) {
+              if (t.to === 'ACTIVE') await client.activateBasePlan(t.productId, t.basePlanId);
+              else await client.deactivateBasePlan(t.productId, t.basePlanId);
+            }
+          } else if (t.kind === 'subOffer') {
+            console.log(`  ${dryPrefix}sub offer: ${t.productId}/${t.basePlanId}/${t.offerId} ${arrow}`);
+            if (!dry) {
+              if (t.to === 'ACTIVE') await client.activateSubscriptionOffer(t.productId, t.basePlanId, t.offerId);
+              else await client.deactivateSubscriptionOffer(t.productId, t.basePlanId, t.offerId);
+            }
+          } else if (t.kind === 'oneTimeOffer') {
+            console.log(`  ${dryPrefix}one-time offer: ${t.productId}/${t.purchaseOptionId}/${t.offerId} ${arrow}`);
+            if (!dry) {
+              if (t.to === 'ACTIVE') await client.activateOneTimeOffer(t.productId, t.purchaseOptionId, t.offerId);
+              else await client.deactivateOneTimeOffer(t.productId, t.purchaseOptionId, t.offerId);
+            }
+          } else {
+            // purchaseOption — log it; the actual call is batched below
+            console.log(`  ${dryPrefix}purchase option: ${t.productId}/${t.purchaseOptionId} ${arrow}`);
+          }
+        }
+
+        // Fire batched purchase-option transitions per product.
+        if (!dry) {
+          for (const [productId, transitions] of purchaseOptionBatches) {
+            await client.setOneTimePurchaseOptionStates(productId, transitions);
+          }
+        }
+
+        const verb = dry ? 'Would reconcile' : 'Reconciled';
+        console.log(chalk.bold(`\n${verb} ${txns.length} state transition(s).`));
+      } catch (error) {
+        console.error(chalk.red('Error:'), error instanceof Error ? error.message : error);
+        process.exit(1);
+      }
+    });
+
   // ---- pull -------------------------------------------------------------
   //
   // Additive merge of live Play state into the committed YAML, the
