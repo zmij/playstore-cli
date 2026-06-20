@@ -714,11 +714,95 @@ export function registerIapCommands(program: Command): void {
       }
     });
 
+  // ---- pull -------------------------------------------------------------
+  //
+  // Additive merge of live Play state into the committed YAML, the
+  // reverse direction of `iap sync`. Uses the yaml Document API so
+  // comments + key order are preserved; only fills gaps, never
+  // overwrites existing local values. Mirrors the appstore-cli Phase 6
+  // command of the same name.
+
+  iap
+    .command('pull')
+    .description('Pull live Play state into the committed YAML — additive merge, preserves comments + local-only fields')
+    .option('--product-id <productId>', 'Pull a single product / sub only')
+    .option('--dry-run', 'Show what would be added/updated without writing')
+    .option('--key-file <path>', 'Path to service account key file')
+    .action(async (options) => {
+      try {
+        const { readFileSync, writeFileSync, existsSync } = await import('fs');
+        const { join } = await import('path');
+        const { parseDocument } = await import('yaml');
+        const { getWorktreeRoot } = await import('../auth.js');
+
+        const yamlPath = join(getWorktreeRoot(), 'l10n', 'metadata', 'play', 'iap.yaml');
+        if (!existsSync(yamlPath)) {
+          console.error(chalk.red(`IAP metadata file not found: ${yamlPath}`));
+          console.error(chalk.yellow(`First-time setup? Run \`playstore iap export --output ${yamlPath}\` to seed it.`));
+          process.exit(1);
+        }
+
+        const client = createClient(options.keyFile);
+        console.log(chalk.blue('Pulling live Play state...'));
+        const live = await fetchLiveIapState(client, false);
+
+        const doc = parseDocument(readFileSync(yamlPath, 'utf-8'));
+        const summary = mergeLiveIntoDocument(doc, live, options.productId, options.dryRun ?? false);
+
+        if (!options.dryRun) {
+          writeFileSync(yamlPath, String(doc));
+          console.log(chalk.green(`\n✓ Merged into ${yamlPath}`));
+        } else {
+          console.log(chalk.yellow('\nDRY RUN — no file written.'));
+        }
+        console.log(`Products added: ${summary.added}`);
+        console.log(`Products updated (gap-filled): ${summary.updated}`);
+        console.log(`Locale slots filled: ${summary.localesAdded}`);
+        console.log(`Options / base plans added: ${summary.optionsAdded}`);
+        console.log(chalk.gray('(existing YAML values are never overwritten; use `iap export` for a full overwrite.)'));
+      } catch (error) {
+        console.error(chalk.red('Error:'), error instanceof Error ? error.message : error);
+        process.exit(1);
+      }
+    });
+
+  // ---- diff -------------------------------------------------------------
+
+  iap
+    .command('diff')
+    .description('Show per-product divergence between the committed YAML and live Play (read-only)')
+    .option('--product-id <productId>', 'Diff a single product only')
+    .option('--key-file <path>', 'Path to service account key file')
+    .action(async (options) => {
+      try {
+        const { readFileSync, existsSync } = await import('fs');
+        const { join } = await import('path');
+        const { parse: parseYaml } = await import('yaml');
+        const { getWorktreeRoot } = await import('../auth.js');
+
+        const yamlPath = join(getWorktreeRoot(), 'l10n', 'metadata', 'play', 'iap.yaml');
+        if (!existsSync(yamlPath)) {
+          console.error(chalk.red(`IAP metadata file not found: ${yamlPath}`));
+          process.exit(1);
+        }
+
+        const yamlState = parseYaml(readFileSync(yamlPath, 'utf-8')) as PlayIAPMetadata;
+        const client = createClient(options.keyFile);
+        console.log(chalk.blue('Diffing YAML vs live Play...\n'));
+        const live = await fetchLiveIapState(client, false);
+
+        diffPlayIapMetadata(yamlState, live, options.productId);
+      } catch (error) {
+        console.error(chalk.red('Error:'), error instanceof Error ? error.message : error);
+        process.exit(1);
+      }
+    });
+
   // ---- export -----------------------------------------------------------
 
   iap
     .command('export')
-    .description('Export full live IAP/subscription state to YAML — OVERWRITES the output file; use `iap pull` (future phase) for surgical merges')
+    .description('Export full live IAP/subscription state to YAML — OVERWRITES the output file; use `iap pull` for surgical merges')
     .requiredOption('--output <path>', 'Output YAML file path')
     .option('--key-file <path>', 'Path to service account key file')
     .action(async (options) => {
@@ -748,6 +832,234 @@ export function registerIapCommands(program: Command): void {
         process.exit(1);
       }
     });
+}
+
+// ============================================================================
+// YAML Document merge (iap pull) — additive only, never overwrites
+// ============================================================================
+//
+// yaml v2 API note: doc.get(key) returns the JS *value*; doc.get(key, true)
+// returns the YAMLMap *node* we need to call .has() / .set() / .get() on.
+// Always pass `true` here so we operate on nodes, not value snapshots.
+// New sub-trees are inserted via doc.createNode(...) — passing a plain
+// JS object to .set() works but produces YAMLMap nodes that look subtly
+// off when re-serialised; createNode keeps formatting consistent.
+
+interface MergeSummary {
+  added: number;
+  updated: number;
+  localesAdded: number;
+  optionsAdded: number;
+}
+
+function mergeLiveIntoDocument(
+  doc: any,
+  live: PlayIAPMetadata,
+  scopedProductId: string | undefined,
+  dryRun: boolean,
+): MergeSummary {
+  const sum: MergeSummary = { added: 0, updated: 0, localesAdded: 0, optionsAdded: 0 };
+  const matchesScope = (id: string) => !scopedProductId || scopedProductId === id;
+
+  for (const top of ['purchases', 'subscriptions']) {
+    if (!doc.has(top)) doc.set(top, doc.createNode({}));
+  }
+
+  // -- one-time products --------------------------------------------
+  const purchasesNode = doc.get('purchases', true);
+  for (const [productId, liveProduct] of Object.entries(live.purchases)) {
+    if (!matchesScope(productId)) continue;
+    if (!purchasesNode.has(productId)) {
+      console.log(chalk.green(`+ purchase: ${productId}`));
+      if (!dryRun) purchasesNode.set(productId, doc.createNode(liveProduct));
+      sum.added++;
+    } else {
+      const before = { localesAdded: sum.localesAdded, optionsAdded: sum.optionsAdded };
+      const yamlEntry = purchasesNode.get(productId, true);
+      mergeYamlListings(doc, yamlEntry, liveProduct.listings, dryRun, `purchases/${productId}`, (n) => { sum.localesAdded += n; });
+      mergeYamlArrayById(
+        doc, yamlEntry, 'purchase_options',
+        liveProduct.purchase_options,
+        (item) => item.purchase_option_id,
+        dryRun, `purchases/${productId}/purchase_options`,
+        (n) => { sum.optionsAdded += n; },
+      );
+      mergeYamlEntryFields(doc, yamlEntry, liveProduct, ['offer_tags'], dryRun, `purchases/${productId}`);
+      if (sum.localesAdded !== before.localesAdded || sum.optionsAdded !== before.optionsAdded) sum.updated++;
+    }
+  }
+
+  // -- subscriptions ------------------------------------------------
+  const subsNode = doc.get('subscriptions', true);
+  for (const [productId, liveSub] of Object.entries(live.subscriptions)) {
+    if (!matchesScope(productId)) continue;
+    if (!subsNode.has(productId)) {
+      console.log(chalk.green(`+ subscription: ${productId}`));
+      if (!dryRun) subsNode.set(productId, doc.createNode(liveSub));
+      sum.added++;
+    } else {
+      const before = { localesAdded: sum.localesAdded, optionsAdded: sum.optionsAdded };
+      const yamlEntry = subsNode.get(productId, true);
+      mergeYamlListings(doc, yamlEntry, liveSub.listings, dryRun, `subscriptions/${productId}`, (n) => { sum.localesAdded += n; });
+      mergeYamlArrayById(
+        doc, yamlEntry, 'base_plans',
+        liveSub.base_plans,
+        (item) => item.base_plan_id,
+        dryRun, `subscriptions/${productId}/base_plans`,
+        (n) => { sum.optionsAdded += n; },
+      );
+      if (sum.localesAdded !== before.localesAdded || sum.optionsAdded !== before.optionsAdded) sum.updated++;
+    }
+  }
+
+  return sum;
+}
+
+/** Fill missing top-level scalar/map fields on a YAML entry from a
+ *  live JS object. Existing values are never touched. */
+function mergeYamlEntryFields(
+  doc: any,
+  yamlEntry: any,
+  liveEntry: Record<string, any>,
+  fields: string[],
+  dryRun: boolean,
+  pathLabel: string,
+): void {
+  for (const field of fields) {
+    const liveVal = (liveEntry as any)[field];
+    if (liveVal === undefined) continue;
+    if (yamlEntry.has(field)) continue;
+    console.log(chalk.green(`+ ${pathLabel}/${field}`));
+    if (!dryRun) yamlEntry.set(field, doc.createNode(liveVal));
+  }
+}
+
+/** Union live listings (locale-keyed map) into a YAML entry. Each
+ *  locale either matches an existing key (no-op) or gets appended. */
+function mergeYamlListings(
+  doc: any,
+  yamlEntry: any,
+  liveLocs: Record<string, PlayListing> | undefined,
+  dryRun: boolean,
+  pathLabel: string,
+  onAdded: (count: number) => void,
+): void {
+  if (!liveLocs || Object.keys(liveLocs).length === 0) return;
+  let yamlLocs = yamlEntry.get('listings', true);
+  for (const [lang, loc] of Object.entries(liveLocs)) {
+    if (!yamlLocs) {
+      console.log(chalk.green(`+ ${pathLabel}/listings`));
+      if (!dryRun) {
+        yamlEntry.set('listings', doc.createNode({ [lang]: loc }));
+        yamlLocs = yamlEntry.get('listings', true);
+      }
+      onAdded(1);
+      continue;
+    }
+    if (!yamlLocs.has(lang)) {
+      console.log(chalk.green(`+ ${pathLabel}/listings/${lang}`));
+      if (!dryRun) yamlLocs.set(lang, doc.createNode(loc));
+      onAdded(1);
+    }
+  }
+}
+
+/** Union a live array onto an array field, matched by an id getter
+ *  (e.g. purchase_option_id, base_plan_id, region). Items present in
+ *  YAML by their id are left as-is; new ids are appended. */
+function mergeYamlArrayById<T>(
+  doc: any,
+  yamlEntry: any,
+  field: string,
+  liveItems: T[] | undefined,
+  idOf: (item: T) => string,
+  dryRun: boolean,
+  pathLabel: string,
+  onAdded: (count: number) => void,
+): void {
+  if (!liveItems || liveItems.length === 0) return;
+  let yamlSeq = yamlEntry.get(field, true);
+  if (!yamlSeq) {
+    if (!dryRun) {
+      yamlEntry.set(field, doc.createNode(liveItems));
+      yamlSeq = yamlEntry.get(field, true);
+    }
+    console.log(chalk.green(`+ ${pathLabel} (${liveItems.length} item${liveItems.length === 1 ? '' : 's'})`));
+    onAdded(liveItems.length);
+    return;
+  }
+  // Collect existing ids by scanning the sequence's items.
+  const haveIds = new Set<string>();
+  for (const item of (yamlSeq.items ?? []) as any[]) {
+    // Each item is a YAMLMap; its toJS() pulls just the id field.
+    const id = item?.get?.(field === 'purchase_options' ? 'purchase_option_id'
+      : field === 'base_plans' ? 'base_plan_id'
+        : 'region');
+    if (typeof id === 'string') haveIds.add(id);
+  }
+  for (const liveItem of liveItems) {
+    const id = idOf(liveItem);
+    if (haveIds.has(id)) continue;
+    console.log(chalk.green(`+ ${pathLabel}/${id}`));
+    if (!dryRun) yamlSeq.add(doc.createNode(liveItem));
+    onAdded(1);
+  }
+}
+
+// ============================================================================
+// iap diff — read-only divergence report
+// ============================================================================
+//
+// Product-level granularity. Listings + per-region pricing diffs are out
+// of scope for Phase 4 — the right primitive for that would be a
+// canonicaliser that normalises both sides to the same shape, then a
+// recursive walk. We can stack that on later if it earns its keep; for
+// now `local-only / live-only` is enough to drive `iap pull` vs `iap
+// sync` decisions.
+
+function diffPlayIapMetadata(
+  yamlState: PlayIAPMetadata,
+  live: PlayIAPMetadata,
+  scopedProductId: string | undefined,
+): void {
+  const matchesScope = (id: string) => !scopedProductId || scopedProductId === id;
+  const rows: Array<{ category: string; path: string }> = [];
+
+  const yamlPurchaseIds = new Set(Object.keys(yamlState.purchases ?? {}));
+  const livePurchaseIds = new Set(Object.keys(live.purchases ?? {}));
+  for (const id of yamlPurchaseIds) {
+    if (!matchesScope(id)) continue;
+    if (!livePurchaseIds.has(id)) rows.push({ category: 'local-only', path: `purchases/${id}` });
+  }
+  for (const id of livePurchaseIds) {
+    if (!matchesScope(id)) continue;
+    if (!yamlPurchaseIds.has(id)) rows.push({ category: 'live-only', path: `purchases/${id}` });
+  }
+
+  const yamlSubIds = new Set(Object.keys(yamlState.subscriptions ?? {}));
+  const liveSubIds = new Set(Object.keys(live.subscriptions ?? {}));
+  for (const id of yamlSubIds) {
+    if (!matchesScope(id)) continue;
+    if (!liveSubIds.has(id)) rows.push({ category: 'local-only', path: `subscriptions/${id}` });
+  }
+  for (const id of liveSubIds) {
+    if (!matchesScope(id)) continue;
+    if (!yamlSubIds.has(id)) rows.push({ category: 'live-only', path: `subscriptions/${id}` });
+  }
+
+  if (rows.length === 0) {
+    console.log(chalk.green('No divergence detected — YAML and live Play match.'));
+    return;
+  }
+
+  rows.sort((a, b) => a.path.localeCompare(b.path));
+  for (const row of rows) {
+    const colour = row.category === 'local-only' ? chalk.yellow : chalk.cyan;
+    console.log(`  ${colour(row.category.padEnd(11))} ${row.path}`);
+  }
+  console.log(chalk.bold(`\n${rows.length} divergence(s).`));
+  console.log(chalk.gray('  • local-only → run `iap sync` to push it'));
+  console.log(chalk.gray('  • live-only  → run `iap pull` to absorb it'));
 }
 
 // ============================================================================
