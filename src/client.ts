@@ -500,6 +500,24 @@ export class PlayStoreClient {
     return res.data;
   }
 
+  /** Create a NEW subscription via the dedicated `create` endpoint.
+   *  Fails on already-exists; use `upsertSubscription` for in-place
+   *  edits. Newly created base plans land in DRAFT state and need a
+   *  follow-up activate call before they show in the store. */
+  async createSubscription(
+    productId: string,
+    body: Schema$Subscription,
+    regionsVersion: string,
+  ): Promise<Schema$Subscription> {
+    const res = await this.publisher.monetization.subscriptions.create({
+      packageName: this.packageName,
+      productId,
+      'regionsVersion.version': regionsVersion,
+      requestBody: body,
+    });
+    return res.data;
+  }
+
   // ============================================================================
   // Subscriptions (new monetization API)
   // ============================================================================

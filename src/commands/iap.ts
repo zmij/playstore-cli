@@ -714,6 +714,134 @@ export function registerIapCommands(program: Command): void {
       }
     });
 
+  // ---- create -----------------------------------------------------------
+  //
+  // Provisions products that are in the YAML but missing from Play.
+  // The inverse-skip of `iap sync` (which patches existing, skips
+  // missing). One-time products go via `patch + allowMissing: true`
+  // (Play's create surface for them); subscriptions go via the
+  // dedicated `monetization.subscriptions.create` endpoint.
+  //
+  // Hard-fail policy: if any --product-id you've scoped to already
+  // exists on Play, the command aborts with an error pointing you at
+  // `iap sync` instead. This stops accidental clobbering of live
+  // state's output-only fields (purchase-option state, etc.).
+  //
+  // Newly-created subscriptions land all their base plans + offers in
+  // DRAFT state — they're not visible to users until activated via
+  // the dedicated activate endpoints (Play's safety net so you don't
+  // ship a half-configured tier). Activating those is a future phase.
+
+  iap
+    .command('create')
+    .description('Create products that are in YAML but missing from Play (hard-fail on already-exists; use `iap sync` for that)')
+    .option('--input <path>', 'YAML file to read (defaults to l10n/metadata/play/iap.yaml)')
+    .option('--product-id <productId>', 'Create a single product only')
+    .option('--regions-version <version>', 'Override Play regions catalog version')
+    .option('--dry-run', 'Report what would be created without making the calls')
+    .option('--key-file <path>', 'Path to service account key file')
+    .action(async (options) => {
+      try {
+        const { readFileSync, existsSync } = await import('fs');
+        const { join } = await import('path');
+        const { parse: parseYaml } = await import('yaml');
+        const { getWorktreeRoot } = await import('../auth.js');
+
+        const yamlPath = options.input
+          ?? join(getWorktreeRoot(), 'l10n', 'metadata', 'play', 'iap.yaml');
+        if (!existsSync(yamlPath)) {
+          console.error(chalk.red(`IAP metadata file not found: ${yamlPath}`));
+          process.exit(1);
+        }
+
+        const yamlState = parseYaml(readFileSync(yamlPath, 'utf-8')) as PlayIAPMetadata;
+        const client = createClient(options.keyFile);
+        const scope = options.productId as string | undefined;
+        const dry = options.dryRun ?? false;
+
+        // Resolve a regionsVersion. We try an existing one-time
+        // product first (which always carries it on GET); if there
+        // are none, the user must pass --regions-version explicitly
+        // since Play's docs don't expose a discovery endpoint for
+        // "current catalog version" at a global level.
+        let regionsVersion = options.regionsVersion as string | undefined;
+        if (!regionsVersion) {
+          for (const productId of Object.keys(yamlState.purchases ?? {})) {
+            const sample = await client.getOneTimeProduct(productId);
+            const v = (sample?.regionsVersion as any)?.version;
+            if (v) { regionsVersion = v; break; }
+          }
+        }
+        if (!regionsVersion) {
+          console.error(chalk.red('Could not resolve a regionsVersion. Pass --regions-version <version> (e.g. "2025/03").'));
+          process.exit(1);
+        }
+        console.log(chalk.gray(`Using regionsVersion: ${regionsVersion}`));
+
+        // First pass: enumerate work + hard-fail on scope conflicts
+        // (the scoped productId exists; pivot to `iap sync`).
+        const toCreate: Array<{ kind: 'onetime' | 'sub'; productId: string }> = [];
+        const conflicts: string[] = [];
+
+        for (const productId of Object.keys(yamlState.purchases ?? {})) {
+          if (scope && scope !== productId) continue;
+          const live = await client.getOneTimeProduct(productId);
+          if (live) {
+            if (scope) conflicts.push(productId);
+            continue;
+          }
+          toCreate.push({ kind: 'onetime', productId });
+        }
+        for (const productId of Object.keys(yamlState.subscriptions ?? {})) {
+          if (scope && scope !== productId) continue;
+          const live = await client.getSubscription(productId);
+          if (live) {
+            if (scope) conflicts.push(productId);
+            continue;
+          }
+          toCreate.push({ kind: 'sub', productId });
+        }
+
+        if (conflicts.length > 0) {
+          console.error(chalk.red(`The following product(s) already exist on Play — use \`iap sync\` to update them:`));
+          for (const id of conflicts) console.error(chalk.red(`  - ${id}`));
+          process.exit(1);
+        }
+
+        if (toCreate.length === 0) {
+          console.log(chalk.gray('Nothing to create — every YAML product is already on Play.'));
+          return;
+        }
+
+        // Second pass: actually create.
+        for (const job of toCreate) {
+          if (job.kind === 'onetime') {
+            const body = oneTimeProductToWire(yamlState.purchases[job.productId]);
+            if (dry) {
+              console.log(chalk.gray(`  [dry-run] + one-time product: ${job.productId}`));
+            } else {
+              await client.upsertOneTimeProduct(job.productId, body, regionsVersion, { allowMissing: true });
+              console.log(chalk.green(`  ✓ created one-time product: ${job.productId}`));
+            }
+          } else {
+            const body = subscriptionToWire(yamlState.subscriptions[job.productId]);
+            if (dry) {
+              console.log(chalk.gray(`  [dry-run] + subscription: ${job.productId}`));
+            } else {
+              await client.createSubscription(job.productId, body, regionsVersion);
+              console.log(chalk.green(`  ✓ created subscription: ${job.productId} (base plans land in DRAFT — activate via Play Console or future phase)`));
+            }
+          }
+        }
+
+        const verb = dry ? 'Would create' : 'Created';
+        console.log(chalk.bold(`\n${verb} ${toCreate.length} product(s).`));
+      } catch (error) {
+        console.error(chalk.red('Error:'), error instanceof Error ? error.message : error);
+        process.exit(1);
+      }
+    });
+
   // ---- pull -------------------------------------------------------------
   //
   // Additive merge of live Play state into the committed YAML, the
