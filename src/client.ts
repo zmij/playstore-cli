@@ -453,6 +453,53 @@ export class PlayStoreClient {
     return out;
   }
 
+  /** Patch a one-time product. Caller passes an explicit updateMask —
+   *  Google rejects `*` here, so we enumerate the YAML-tracked fields
+   *  by default: `listings`, `purchaseOptions`, `offerTags`. The
+   *  `regionsVersion` is required by the API; copy from the current
+   *  GET response so callers stay on Play's current regions snapshot
+   *  unless they explicitly bump it. `allowMissing: true` lets the
+   *  same call create a new product if the productId is fresh. */
+  async upsertOneTimeProduct(
+    productId: string,
+    body: Schema$OneTimeProduct,
+    regionsVersion: string,
+    options: { updateMask?: string; allowMissing?: boolean } = {},
+  ): Promise<Schema$OneTimeProduct> {
+    const res = await this.publisher.monetization.onetimeproducts.patch({
+      packageName: this.packageName,
+      productId,
+      'regionsVersion.version': regionsVersion,
+      updateMask: options.updateMask ?? 'listings,purchaseOptions,offerTags',
+      allowMissing: options.allowMissing ?? false,
+      requestBody: body,
+    });
+    return res.data;
+  }
+
+  /** Patch a subscription. Same shape as one-time-product upsert.
+   *  Default updateMask covers `listings` + `basePlans` — the YAML
+   *  tracks both. Base-plan + offer STATE (DRAFT / ACTIVE / INACTIVE)
+   *  is output-only here; lifecycle goes through dedicated
+   *  activate/deactivate endpoints (not exposed on this client yet —
+   *  Phase 2 sticks to content + pricing). */
+  async upsertSubscription(
+    productId: string,
+    body: Schema$Subscription,
+    regionsVersion: string,
+    options: { updateMask?: string; allowMissing?: boolean } = {},
+  ): Promise<Schema$Subscription> {
+    const res = await this.publisher.monetization.subscriptions.patch({
+      packageName: this.packageName,
+      productId,
+      'regionsVersion.version': regionsVersion,
+      updateMask: options.updateMask ?? 'listings,basePlans',
+      allowMissing: options.allowMissing ?? false,
+      requestBody: body,
+    });
+    return res.data;
+  }
+
   // ============================================================================
   // Subscriptions (new monetization API)
   // ============================================================================

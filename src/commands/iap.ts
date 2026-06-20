@@ -81,6 +81,12 @@ function availabilityFromWire(a: string | null | undefined): PlayAvailability | 
   return a.toLowerCase().replace(/^availability_/, '') as PlayAvailability;
 }
 
+/** YAML lower-case-snake → wire enum (UPPER_SNAKE_CASE). */
+function availabilityToWire(a: PlayAvailability | undefined): string | undefined {
+  if (!a) return undefined;
+  return a.toUpperCase();
+}
+
 // ---------- one-time products -------------------------------------------------
 
 function purchaseOptionFromWire(
@@ -319,6 +325,116 @@ function subscriptionFromWire(
 }
 
 // ============================================================================
+// YAML → wire converters (drive the sync push)
+// ============================================================================
+
+function oneTimeProductToWire(yamlProduct: OneTimeProduct): Schema$OneTimeProduct {
+  return {
+    listings: Object.entries(yamlProduct.listings).map(([lang, l]) => ({
+      languageCode: lang,
+      title: l.title,
+      description: l.description,
+    })),
+    purchaseOptions: yamlProduct.purchase_options.map(purchaseOptionToWire),
+    ...(yamlProduct.offer_tags && yamlProduct.offer_tags.length > 0 && {
+      offerTags: yamlProduct.offer_tags.map((tag) => ({ tag })),
+    }),
+  };
+}
+
+function purchaseOptionToWire(po: PurchaseOption): Schema$OneTimeProductPurchaseOption {
+  const out: Schema$OneTimeProductPurchaseOption = {
+    purchaseOptionId: po.purchase_option_id,
+  };
+  if (po.buy) {
+    out.buyOption = {
+      ...(po.buy.legacy_compatible !== undefined && { legacyCompatible: po.buy.legacy_compatible }),
+      ...(po.buy.multi_quantity_enabled !== undefined && {
+        multiQuantityEnabled: po.buy.multi_quantity_enabled,
+      }),
+    };
+  }
+  if (po.rent) {
+    out.rentOption = {
+      rentalPeriod: po.rent.rental_period,
+      ...(po.rent.expiration_period && { expirationPeriod: po.rent.expiration_period }),
+    };
+  }
+  if (po.new_regions) {
+    out.newRegionsConfig = {
+      usdPrice: moneyToWire(po.new_regions.usd_price),
+      eurPrice: moneyToWire(po.new_regions.eur_price),
+      ...(po.new_regions.availability && {
+        availability: availabilityToWire(po.new_regions.availability),
+      }),
+    };
+  }
+  if (po.regional_configs && po.regional_configs.length > 0) {
+    out.regionalPricingAndAvailabilityConfigs = po.regional_configs.map((rc) => ({
+      regionCode: rc.region,
+      price: moneyToWire(rc.price),
+      ...(rc.availability && { availability: availabilityToWire(rc.availability) }),
+    }));
+  }
+  if (po.offer_tags && po.offer_tags.length > 0) {
+    out.offerTags = po.offer_tags.map((tag) => ({ tag }));
+  }
+  return out;
+}
+
+function subscriptionToWire(yamlSub: PlaySubscription): Schema$Subscription {
+  return {
+    listings: Object.entries(yamlSub.listings).map(([lang, l]) => ({
+      languageCode: lang,
+      title: l.title,
+      description: l.description,
+      ...(l.benefits && l.benefits.length > 0 && { benefits: l.benefits }),
+    })),
+    basePlans: yamlSub.base_plans.map(basePlanToWire),
+  };
+}
+
+function basePlanToWire(plan: BasePlan): androidpublisher_v3.Schema$BasePlan {
+  const out: androidpublisher_v3.Schema$BasePlan = {
+    basePlanId: plan.base_plan_id,
+  };
+  if (plan.auto_renewing) {
+    out.autoRenewingBasePlanType = {
+      billingPeriodDuration: plan.auto_renewing.billing_period,
+      ...(plan.auto_renewing.grace_period && {
+        gracePeriodDuration: plan.auto_renewing.grace_period,
+      }),
+      ...(plan.auto_renewing.legacy_compatible && { legacyCompatible: true }),
+    };
+  }
+  if (plan.prepaid) {
+    out.prepaidBasePlanType = {
+      billingPeriodDuration: plan.prepaid.billing_period,
+    };
+  }
+  if (plan.other_regions) {
+    out.otherRegionsConfig = {
+      usdPrice: moneyToWire(plan.other_regions.usd_price),
+      eurPrice: moneyToWire(plan.other_regions.eur_price),
+      ...(plan.other_regions.new_subscriber_availability && {
+        newSubscriberAvailability: true,
+      }),
+    };
+  }
+  if (plan.regional_configs && plan.regional_configs.length > 0) {
+    out.regionalConfigs = plan.regional_configs.map((rc) => ({
+      regionCode: rc.region,
+      price: moneyToWire(rc.price),
+      ...(rc.new_subscriber_availability && { newSubscriberAvailability: true }),
+    }));
+  }
+  if (plan.offer_tags && plan.offer_tags.length > 0) {
+    out.offerTags = plan.offer_tags.map((tag) => ({ tag }));
+  }
+  return out;
+}
+
+// ============================================================================
 // Live-state harvester (shared by list / show / export)
 // ============================================================================
 
@@ -468,6 +584,130 @@ export function registerIapCommands(program: Command): void {
         console.error(chalk.red(`Not found on Play: ${productId}`));
         console.error(chalk.gray('Check the productId — `playstore iap list` shows everything.'));
         process.exit(1);
+      } catch (error) {
+        console.error(chalk.red('Error:'), error instanceof Error ? error.message : error);
+        process.exit(1);
+      }
+    });
+
+  // ---- sync -------------------------------------------------------------
+  //
+  // Reads the committed YAML (`l10n/metadata/play/iap.yaml`) and patches
+  // each one-time product + subscription on Play to match. The default
+  // path is the worktree-root committed YAML; --input lets you override
+  // for ad-hoc files.
+  //
+  // What the patch covers (Phase 2):
+  //   * one-time products: listings, purchase options (including
+  //     new_regions + regional_configs + offer_tags). Purchase-option
+  //     STATE is output-only on the wire — Play preserves it across
+  //     patches; lifecycle (activate / deactivate) is a future phase.
+  //   * subscriptions: listings, base plans (with prices + offer_tags).
+  //     Base-plan state is output-only, same as above.
+  //   * offers (one-time and subscription): NOT YET — handled in a
+  //     follow-up phase via their dedicated sub-resources +
+  //     activate/deactivate endpoints. Phase 2 leaves offers untouched.
+  //
+  // Each patch carries the live product's `regionsVersion` so the call
+  // doesn't fail on stale-version errors after a Play-side region update.
+
+  iap
+    .command('sync')
+    .description('Push YAML (l10n/metadata/play/iap.yaml) into Play — additive patches, preserves output-only state fields')
+    .option('--input <path>', 'YAML file to read (defaults to l10n/metadata/play/iap.yaml)')
+    .option('--product-id <productId>', 'Sync a single product only')
+    .option('--regions-version <version>', 'Override Play regions catalog version (defaults to whatever Play returns on the first one-time product)')
+    .option('--dry-run', 'Report what would be patched without making the calls')
+    .option('--key-file <path>', 'Path to service account key file')
+    .action(async (options) => {
+      try {
+        const { readFileSync, existsSync } = await import('fs');
+        const { join } = await import('path');
+        const { parse: parseYaml } = await import('yaml');
+        const { getWorktreeRoot } = await import('../auth.js');
+
+        const yamlPath = options.input
+          ?? join(getWorktreeRoot(), 'l10n', 'metadata', 'play', 'iap.yaml');
+        if (!existsSync(yamlPath)) {
+          console.error(chalk.red(`IAP metadata file not found: ${yamlPath}`));
+          console.error(chalk.yellow(`First-time setup? Run \`playstore iap export --output ${yamlPath}\` to seed it.`));
+          process.exit(1);
+        }
+
+        const yamlState = parseYaml(readFileSync(yamlPath, 'utf-8')) as PlayIAPMetadata;
+        const client = createClient(options.keyFile);
+        const scope = options.productId as string | undefined;
+        const dry = options.dryRun ?? false;
+
+        // regionsVersion is required on every patch. One-time products
+        // return it in the GET response; subscriptions don't. Resolve a
+        // single shared default by pulling the first available one-time
+        // product's version, falling back to the user override. (The
+        // version string lives in Play's regions catalog — see
+        // https://support.google.com/googleplay/android-developer/answer/10532353.)
+        let defaultRegionsVersion = options.regionsVersion as string | undefined;
+        if (!defaultRegionsVersion) {
+          const firstOneTime = Object.keys(yamlState.purchases ?? {})[0];
+          if (firstOneTime) {
+            const sample = await client.getOneTimeProduct(firstOneTime);
+            defaultRegionsVersion = (sample?.regionsVersion as any)?.version;
+          }
+        }
+        if (!defaultRegionsVersion) {
+          console.error(chalk.red('Could not resolve a regionsVersion. Pass --regions-version <version> (e.g. "2025/03").'));
+          process.exit(1);
+        }
+        console.log(chalk.gray(`Using regionsVersion: ${defaultRegionsVersion}`));
+
+        let synced = 0;
+        let skipped = 0;
+
+        // ---- one-time products ----
+        for (const [productId, yamlProduct] of Object.entries(yamlState.purchases ?? {})) {
+          if (scope && scope !== productId) continue;
+          // Prefer the live product's own regionsVersion (in case it's
+          // already on a newer one than our default); fall back to the
+          // shared default for fresh products / read failures.
+          const live = await client.getOneTimeProduct(productId);
+          if (!live) {
+            console.error(chalk.yellow(`  ! ${productId}: not on Play yet — skipping (will be picked up by Phase 3 \`iap create\`)`));
+            skipped++;
+            continue;
+          }
+          const regionsVersion = (live.regionsVersion as any)?.version ?? defaultRegionsVersion;
+          const body = oneTimeProductToWire(yamlProduct);
+          if (dry) {
+            console.log(chalk.gray(`  [dry-run] one-time product: ${productId} (${body.listings?.length ?? 0} loc, ${body.purchaseOptions?.length ?? 0} opts)`));
+          } else {
+            await client.upsertOneTimeProduct(productId, body, regionsVersion);
+            console.log(chalk.green(`  ✓ one-time product: ${productId}`));
+          }
+          synced++;
+        }
+
+        // ---- subscriptions ----
+        for (const [productId, yamlSub] of Object.entries(yamlState.subscriptions ?? {})) {
+          if (scope && scope !== productId) continue;
+          const live = await client.getSubscription(productId);
+          if (!live) {
+            console.error(chalk.yellow(`  ! ${productId}: not on Play yet — skipping (will be picked up by Phase 3 \`iap create\`)`));
+            skipped++;
+            continue;
+          }
+          // Subscriptions don't carry regionsVersion in the response;
+          // reuse the shared default resolved at the top of the command.
+          const body = subscriptionToWire(yamlSub);
+          if (dry) {
+            console.log(chalk.gray(`  [dry-run] subscription: ${productId} (${body.listings?.length ?? 0} loc, ${body.basePlans?.length ?? 0} plans)`));
+          } else {
+            await client.upsertSubscription(productId, body, defaultRegionsVersion);
+            console.log(chalk.green(`  ✓ subscription: ${productId}`));
+          }
+          synced++;
+        }
+
+        const verb = dry ? 'Would sync' : 'Synced';
+        console.log(chalk.bold(`\n${verb} ${synced} product(s); skipped ${skipped}.`));
       } catch (error) {
         console.error(chalk.red('Error:'), error instanceof Error ? error.message : error);
         process.exit(1);
