@@ -15,7 +15,11 @@
     "build": "tsc",
     "start": "node build/index.js",
     "dev": "npm run build && npm run start",
-    "watch": "tsc --watch"
+    "watch": "tsc --watch",
+    "docs:llms": "node scripts/build-llms-full.mjs",
+    "docs:dev": "npm run docs:llms && vitepress dev docs",
+    "docs:build": "npm run docs:llms && vitepress build docs",
+    "docs:preview": "vitepress preview docs"
   },
   "keywords": [
     "playstore",
@@ -46,7 +50,8 @@
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "vitepress": "^1.5.0"
   },
   "engines": {
     "node": ">=18.0.0"

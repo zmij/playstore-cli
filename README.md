@@ -2,6 +2,8 @@
 
 A CLI + bundled MCP server for managing **Google Play Console** metadata, screenshots, one-time products, and subscriptions from YAML files. Designed for teams that want their store listing under version control instead of click-driven through the Play Console website.
 
+📖 **Documentation: <https://zmij.github.io/playstore-cli/>** (`llms.txt` available for agents at [`/llms.txt`](https://zmij.github.io/playstore-cli/llms.txt))
+
 What it does:
 
 - Pull every per-language listing, one-time product, subscription, base plan, offer, screenshot count, and release-track snapshot into committed YAML.
@@ -275,9 +277,9 @@ For human contributors: PRs welcome. Run `npx tsc --noEmit` to typecheck. There 
 
 ## Adopters
 
-> I built this to manage [Lazy Sudoku](https://lazy-sudoku.com)'s Play Console — 14-locale listings, plus the full IAP catalogue (9 one-time products + 3 subscriptions with monthly/annual base plans) committed as YAML and synced via `playstore iap sync`. The bundled MCP server lets Claude Code read live Play state during release prep without me leaving the terminal. Everything goes through PRs; nothing happens by clicking through the Play Console.
+> I built this to manage [Lazy Sudoku](https://lazy-sudoku.online)'s Play Console — 14-locale listings, plus the full IAP catalogue (9 one-time products + 3 subscriptions with monthly/annual base plans) committed as YAML and synced via `playstore iap sync`. The bundled MCP server lets Claude Code read live Play state during release prep without me leaving the terminal. Everything goes through PRs; nothing happens by clicking through the Play Console.
 >
-> — *Sergei Fedorov, [Lazy Sudoku](https://lazy-sudoku.com)*
+> — *Sergei Fedorov, [Lazy Sudoku](https://lazy-sudoku.online)*
 
 Using playstore-cli somewhere? Open a PR adding yourself to this section.
 
