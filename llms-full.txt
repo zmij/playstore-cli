@@ -1,0 +1,927 @@
+# playstore-flow — full documentation
+
+Single-file concatenation of every page on the playstore-flow docs site,
+for one-shot LLM ingestion. Live site: https://zmij.github.io/playstore-cli/
+
+Install: npm install -g playstore-flow (GitHub repo lives at zmij/playstore-cli).
+
+Page index:
+- What is playstore-flow? — https://zmij.github.io/playstore-cli/
+- Get started — https://zmij.github.io/playstore-cli/getting-started
+- Authentication — https://zmij.github.io/playstore-cli/auth
+- Workflow — https://zmij.github.io/playstore-cli/workflow
+- IAP schema — https://zmij.github.io/playstore-cli/iap-schema
+- Listings schema — https://zmij.github.io/playstore-cli/listings-schema
+- Play quirks — https://zmij.github.io/playstore-cli/quirks
+
+---
+# What is playstore-flow?
+
+Source: https://zmij.github.io/playstore-cli/
+
+## What it does
+
+`playstore-flow` puts your Android store presence under version control. Instead of clicking through the Play Console's per-language tabs and per-product editors to update copy, prices, or release notes, you pull live state into committed YAML, edit it in your editor, and sync it back through normal PR review.
+
+The bundled `playstore-mcp` server exposes the same client code over stdio so any MCP-aware agent — Claude Code, Cursor, Windsurf, Cline, Continue, Zed — can read and update live Play state without shelling out.
+
+## Quick install
+
+```bash
+npm install -g playstore-flow
+# or, from a checkout (the GitHub repo is still `playstore-cli` —
+# only the npm package name has been rebranded to `playstore-flow`):
+git clone https://github.com/zmij/playstore-cli.git
+cd playstore-cli && npm install && npm run build && npm link
+```
+
+Then see [Get started](/getting-started) for the first-run walkthrough.
+
+## In production
+
+> I built this to manage [Lazy Sudoku](https://lazy-sudoku.online)'s Play Console — 14-locale listings, plus the full IAP catalogue (9 one-time products + 3 subscriptions with monthly/annual base plans) committed as YAML and synced via `playstore iap sync`. The bundled MCP server lets Claude Code read live Play state during release prep without me leaving the terminal. Everything goes through PRs; nothing happens by clicking through the Play Console.
+>
+> — *Sergei Fedorov, [Lazy Sudoku](https://lazy-sudoku.online)*
+
+Using playstore-flow somewhere? [Open a PR](https://github.com/zmij/playstore-cli/blob/master/README.md) adding yourself to the Adopters section in the README.
+
+---
+
+# Get started
+
+Source: https://zmij.github.io/playstore-cli/getting-started
+
+# Get started
+
+A 5-minute walkthrough from zero to your first round-tripped Play listing.
+
+## 1. Install
+
+```bash
+npm install -g playstore-flow
+```
+
+Two binaries land on your `PATH`:
+
+| Binary | Purpose |
+|---|---|
+| `playstore` | The CLI |
+| `playstore-mcp` | The MCP server (stdio) — used by Claude Code / Cursor / other agents |
+
+Verify:
+
+```bash
+playstore --help
+which playstore-mcp
+```
+
+If you'd rather work from a checkout (handy when contributing back):
+
+```bash
+git clone https://github.com/zmij/playstore-cli.git
+cd playstore-cli && npm install && npm run build && npm link
+```
+
+## 2. Create a Play service account
+
+Google Cloud Console → **IAM & Admin → Service Accounts** in the project linked to your Play Console. Create a service account, generate a JSON key, download it once (Google won't show it again).
+
+Then in Play Console → **Setup → API access**, link the service account and grant it the roles you need (Release manager + Edit store listing for the full CLI surface; tighter roles work for read-only).
+
+Note your app's **package name** (e.g. `com.yourcompany.yourapp`) from any APK / AAB you've uploaded, or from Play Console → your app → Dashboard.
+
+See [Authentication](/auth) for role tuning, key rotation, and env-var overrides.
+
+## 3. Drop the config file
+
+The CLI looks for credentials in `<repo>/.secret-stuff/` by default. Create the directory (gitignored — never commit) and the config:
+
+```yaml
+# .secret-stuff/playstore-config.yaml
+package_name: "com.yourcompany.yourapp"
+service_account_key: "service-account.json"
+```
+
+Drop the JSON key next to it: `.secret-stuff/service-account.json`.
+
+**Different layout?** Three independent env vars let you point at any directory split:
+
+| Env var | Default | What it points at |
+|---|---|---|
+| `PLAYSTORE_SECRETS_DIR` | `.secret-stuff/` | `playstore-config.yaml` + service-account JSON |
+| `PLAYSTORE_METADATA_DIR` | `l10n/metadata/play/` | `iap.yaml` |
+| `PLAYSTORE_LISTINGS_DIR` | `l10n/metadata/google/` | Per-language listings + screenshots + release notes |
+
+Why three knobs and not one? Play has historically split IAP YAML and listings across two directories; the CLI defaults match Lazy Sudoku's layout, but downstream users can unify by setting `METADATA_DIR` and `LISTINGS_DIR` to the same value. See the [README's Configuration section](https://github.com/zmij/playstore-cli#configuration).
+
+## 4. Pull live state into YAML
+
+Read-only — proves auth works and gives you a starting point.
+
+```bash
+# Listings: per-language store copy + release notes → l10n/metadata/google/listings/<lang>.yaml
+playstore listings export
+
+# IAP catalogue: every one-time product / subscription / base plan / offer → l10n/metadata/play/iap.yaml
+playstore iap export --output l10n/metadata/play/iap.yaml
+```
+
+Open the files. Commit them — they are now the source of truth for your store.
+
+## 5. Edit + push
+
+Edit a value in `l10n/metadata/google/listings/en-GB.yaml` — say, the `short_description`. Then preview before pushing:
+
+```bash
+# Show what would change vs. live state
+playstore listings sync --dry-run
+
+# Push it
+playstore listings sync
+```
+
+Same shape for IAP:
+
+```bash
+playstore iap sync --dry-run
+playstore iap sync
+```
+
+`sync` only patches fields that differ — your hand-edits don't overwrite the world. See [Workflow](/workflow) for the full export → edit → sync → pull → reconcile loop, plus the `iap create` and `iap state` paths (one-time products and subscription base plans / offers have separate state lifecycles).
+
+## 6. (Optional) Wire up the MCP server
+
+Let Claude Code (or any MCP client) read live Play state during release prep without you leaving the terminal:
+
+```bash
+# In the project directory where your secrets live
+claude mcp add playstore playstore-mcp
+```
+
+Then ask the agent things like *"show me the en-GB listing"* or *"what subscriptions are active?"*. The agent calls the same client code the CLI uses — no shelling.
+
+See the [README's MCP Server section](https://github.com/zmij/playstore-cli#mcp-server) for scope (local / project / user), other MCP clients (Cursor, Windsurf, Cline), and the working-directory + auth gotchas.
+
+## Next steps
+
+- [Workflow](/workflow) — full export → edit → sync → pull → reconcile loop, plus `iap create`, `iap state` (activate / deactivate base plans + offers), and `iap migrate-prices`.
+- [IAP schema](/iap-schema) — every field in `iap.yaml`: one-time products, subscriptions, base plans, offers, regional configs (with `Money` per region + `new_regions` fallback).
+- [Listings schema](/listings-schema) — per-language `listings/<lang>.yaml` shape; title / short-description / full-description / release-notes length limits.
+- [Play quirks](/quirks) — non-obvious gotchas the CLI works around (`regionsVersion`, `monetization.*` vs legacy `inappproducts`, edit-session discipline, `batchUpdateStates` for one-time purchase options, DRAFT-on-create, …).
+
+---
+
+# Authentication
+
+Source: https://zmij.github.io/playstore-cli/auth
+
+# Authentication
+
+The CLI authenticates to the Google Play Developer API via a service account. This doc covers how to create one, what roles it needs, and how to plumb it into the config.
+
+## TL;DR
+
+```bash
+# 1. Create a service account on Google Cloud + grant it Play Console access (see below)
+# 2. Download the JSON key to .secret-stuff/
+# 3. Write .secret-stuff/playstore-config.yaml:
+#    package_name: "com.your.app"
+#    service_account_key: "play-service-account.json"
+# 4. Smoke-test:
+playstore info
+```
+
+## Creating a service account
+
+The setup has **two halves** — Google Cloud (where the service account lives) and Play Console (where you grant it the right roles).
+
+### Half 1: Google Cloud
+
+1. [console.cloud.google.com](https://console.cloud.google.com/) → pick or create a project.
+2. **IAM & Admin → Service Accounts → Create Service Account**.
+3. Name it something obvious (`play-publisher`, `play-cli-readonly`, etc.).
+4. **Don't grant any GCP roles here** — Play access is granted in Play Console, not GCP IAM.
+5. After creating, click the account → **Keys → Add Key → Create new key → JSON**.
+6. Save the downloaded JSON to your repo's `.secret-stuff/`.
+
+### Half 2: Play Console
+
+1. [play.google.com/console](https://play.google.com/console/) → **Users and permissions → Invite new users**.
+2. Email is the service account's email (looks like `play-publisher@your-project.iam.gserviceaccount.com`).
+3. **App access**: pick the app(s) this service account should manage.
+4. **Account permissions** + **App permissions**: see roles below.
+5. Save. Propagation takes a few minutes.
+
+## Required roles
+
+For the operations the CLI supports, you want **at minimum**:
+
+| Permission | Why |
+|---|---|
+| **View app information and download bulk reports** | Required for almost every read |
+| **Edit store listing, pricing & distribution** | `listings update`, `iap sync`, `iap migrate-prices` |
+| **Manage store presence** | Custom store listings, store-listing experiments |
+| **Manage production releases** + **Manage testing tracks** | `tracks` commands |
+
+For read-only setups (CI checks, dashboards), the **View app information** role on its own is enough for `playstore info`, `iap list`, `iap show`, `iap diff`, `listings show`.
+
+For pushes, you want `Edit store listing` + `Manage releases` per app you're managing.
+
+## Multiple service accounts
+
+You can configure multiple keys, though playstore-cli's config format is simpler than appstore-cli's — one `service_account_key` per config file. To use multiple, either:
+
+- Run with `--key-file <path>` to override per call.
+- Set `GOOGLE_PLAY_KEY_FILE` env var for the shell.
+
+Or maintain multiple worktrees with different configs if you have a strong separation between read-only and read-write keys.
+
+## Auth lifecycle
+
+The CLI uses the `googleapis` library, which handles OAuth2 token exchange automatically:
+
+1. Reads the JSON key.
+2. Signs a JWT assertion (`iss`, `scope`, `aud`, `exp`).
+3. Exchanges the JWT for an OAuth2 access token via Google's token endpoint.
+4. Caches the access token for ~1 hour (Google's default).
+
+You don't manage tokens — they refresh automatically as needed. The JSON key never leaves your machine.
+
+## Service-account rotation
+
+```bash
+# 1. Create a NEW JSON key on Google Cloud (keep the old one active)
+# 2. Drop the new JSON in .secret-stuff/
+# 3. Smoke with --key-file <new-json>
+playstore info --key-file .secret-stuff/play-new.json
+# 4. Once you've confirmed it works, swap service_account_key in playstore-config.yaml
+# 5. Delete the old key on Google Cloud
+```
+
+If you're paranoid about Play API access during rotation, the old key keeps working until you delete it; there's no atomic-swap required.
+
+## Validating auth
+
+The cheapest read is `playstore info`:
+
+```bash
+playstore info
+# {
+#   "packageName": "com.your.app",
+#   "defaultLanguage": "en-GB",
+#   "contactWebsite": "https://your.app",
+#   ...
+# }
+```
+
+If you see `403 Forbidden`, the service account doesn't have Play Console access for that app — go back to Play Console → Users and permissions and add it.
+
+If you see `401 Unauthorized` or `invalid_grant`, the JSON key is wrong (typo in path, corrupted file, or revoked on GCP).
+
+## Security
+
+- **Never commit `play-service-account.json` or `playstore-config.yaml`.** Verify `.secret-stuff/` is in your `.gitignore` before your first commit.
+- The JSON private key is stored on disk only; the CLI loads it on each run, exchanges it for an access token, and caches the access token in-process for the request lifetime.
+- Service accounts can be revoked in either GCP IAM (kills the JWT signing) or Play Console (kills the app access). Use both during rotation for defence in depth.
+
+## Env-var overrides
+
+| Var | Effect |
+|---|---|
+| `GOOGLE_PLAY_KEY_FILE` | Use this JSON path instead of the config's `service_account_key` |
+| `PLAYSTORE_SECRETS_DIR` | Where to look for `playstore-config.yaml` + JSON |
+| `PLAYSTORE_METADATA_DIR` | Override where `iap.yaml` lives |
+| `PLAYSTORE_LISTINGS_DIR` | Override where listings + screenshots + release notes live |
+
+---
+
+# Workflow
+
+Source: https://zmij.github.io/playstore-cli/workflow
+
+# Workflow
+
+The CLI exists to make Play Console editable from text files instead of a website. The canonical loop is **export → edit → sync**, with **pull** + **diff** filling in two-way reconciliation, and **state** + **migrate-prices** handling the things `sync` deliberately doesn't touch.
+
+## The core loop (IAPs + subscriptions)
+
+```bash
+# One-time: seed the YAML from live Play.
+playstore iap export --output l10n/metadata/play/iap.yaml
+git add l10n/metadata/play/iap.yaml && git commit -m "seed: iap metadata"
+
+# Day-to-day: edit YAML, push.
+$EDITOR l10n/metadata/play/iap.yaml
+playstore iap sync --dry-run                # safe preview
+playstore iap sync                          # push for real
+git commit -am "Update IAP copy for v1.2"
+
+# When someone edits Play Console directly:
+playstore iap diff                          # show what drifted
+playstore iap pull                          # absorb live changes without overwriting local
+git diff l10n/metadata/play/iap.yaml        # review what came in
+```
+
+## What `iap sync` does and doesn't touch
+
+`sync` patches **content + pricing** for existing products:
+
+- Listings (per-language `display_name` + `description`)
+- Purchase options + their `regional_configs` + `new_regions` fallback
+- Base plans + their regional configs
+- Offer tags
+
+It does NOT touch:
+
+- **State** (`ACTIVE` / `INACTIVE` / `DRAFT`) — output-only on the patch. Use `iap state`.
+- **Existing subscriber pricing** — patching writes the new price for new subscribers only. Use `iap migrate-prices` for the rest.
+- **Offers** themselves (creating new offers via sync isn't supported yet — coming in a follow-up).
+
+This separation is intentional: state changes affect store visibility, price migrations affect billing, and offer creation has user-impact implications. Each gets its own verb.
+
+## Creating new products
+
+`iap sync` only patches existing products; it skips missing ones with a yellow warning. To create:
+
+```bash
+# Add new entries to iap.yaml
+$EDITOR l10n/metadata/play/iap.yaml
+
+# Pre-flight: does Play think this productId is taken?
+playstore iap create --product-id premium_yearly --dry-run
+
+# Actually create. Hard-fails if the productId already exists (use sync instead).
+playstore iap create --product-id premium_yearly
+```
+
+Newly-created subscriptions land their base plans + offers in **DRAFT** state — they're invisible to users until you activate them:
+
+```bash
+# Flip them ACTIVE
+playstore iap state --product-id premium_yearly
+```
+
+(Or use Play Console for the manual flip.)
+
+## Lifecycle (state)
+
+Reconcile YAML's `state:` fields with what's live on Play:
+
+```bash
+# Inspect — finds where YAML says one thing and live says another
+playstore iap state --dry-run
+
+# Apply
+playstore iap state
+```
+
+The command walks every base plan, subscription offer, one-time offer, and purchase option and routes each transition to the right endpoint:
+
+- Base plans, sub offers, one-time offers → individual activate/deactivate calls.
+- One-time **purchase options** → batched per parent product (Play has no single-option lifecycle endpoint).
+
+`yaml.state = draft` is treated as "leave alone" — you don't transition TO draft from CLI.
+
+## Pricing migration
+
+Patch operations make new prices apply to **new** subscribers only. Existing subscribers stay on their old cohort price.
+
+```bash
+# Scope: ONE subscription + ONE base plan + a region list per invocation.
+playstore iap migrate-prices \
+  --product-id premium_monthly \
+  --base-plan-id premium-monthly \
+  --regions US,GB,DE \
+  --dry-run
+
+# Or all priced regions on this plan:
+playstore iap migrate-prices \
+  --product-id premium_monthly \
+  --base-plan-id premium-monthly \
+  --regions all \
+  --cutoff 2025-01-01T00:00:00Z \
+  --increase-type PRICE_INCREASE_TYPE_OPT_IN
+```
+
+`--cutoff` defaults to **now** (every existing cohort migrates). Pass an earlier ISO timestamp to preserve a recent cohort. `--increase-type` is optional — omit for Play's default (typically opt-in for increases, auto-apply for decreases).
+
+Single-purpose by design — no auto-fan-out across products, no YAML-drift auto-detection. Price migrations have user impact (billing notifications, opt-in flows) and the operator picks each plan deliberately.
+
+## Two-way reconciliation
+
+```bash
+playstore iap diff                          # what differs
+playstore iap pull --dry-run                # what `pull` would absorb
+playstore iap pull                          # absorb (additive only)
+git diff l10n/metadata/play/iap.yaml        # commit if it looks right
+```
+
+`pull` is **additive only**. If a product exists in both YAML and live but their fields differ, `pull` leaves the YAML alone — you decide:
+
+- `iap sync` → YAML wins (overwrites live)
+- Hand-edit YAML to match live, then `pull` is a no-op
+
+## Listings
+
+```bash
+# Edit per-locale YAML
+$EDITOR l10n/metadata/google/listings/en-GB.yaml
+
+# Push
+playstore listings update --lang en-GB --dry-run
+playstore listings update --lang en-GB
+```
+
+Note the **default** listings location is `l10n/metadata/google/` not `l10n/metadata/play/` — the historical Lazy Sudoku split. Greenfield projects can unify via `listings_dir: {metadata_dir}` in `playstore-cli.config.yaml`.
+
+## Release tracks
+
+Release notes come from `play-store-*.md` files (one per language) parsed for their `## What's New` section. Promote a build through tracks:
+
+```bash
+playstore tracks list                       # current state
+playstore tracks update internal --version-code 60710 --status completed
+```
+
+## CI integration
+
+Both `iap sync` and `listings update` exit non-zero on failure:
+
+```yaml
+# .github/workflows/release.yml
+- name: Push Play metadata
+  env:
+    GOOGLE_PLAY_KEY_FILE: ${{ secrets.PLAY_SA_KEY_PATH }}
+  run: |
+    playstore listings update --all
+    playstore iap sync
+```
+
+For preview-mode CI (PR builds that shouldn't touch live state):
+
+```yaml
+- name: Validate metadata
+  run: |
+    playstore listings update --all --dry-run
+    playstore iap sync --dry-run
+    playstore iap diff           # exits 0 even with divergence
+```
+
+## Screenshots
+
+```bash
+# Upload one language's set, replacing whatever's there
+playstore screenshots upload --source ./shots/en-GB --lang en-GB --mode replace
+
+# Upload every language
+playstore screenshots upload --source ./shots --all --mode replace
+```
+
+`./shots/<lang>/` should contain device-categorised files matching Play's naming conventions (phone, sevenInch tablet, tenInch tablet).
+
+---
+
+# IAP schema
+
+Source: https://zmij.github.io/playstore-cli/iap-schema
+
+# `iap.yaml` schema
+
+The full YAML format for `iap.yaml`. Covers one-time products (managed products), subscriptions, base plans, offers, and the regional pricing structures.
+
+## Top-level shape
+
+```yaml
+purchases:                    # one-time products (managed; non-consumable mostly)
+  <product_id>:
+    listings:
+      <lang>:
+        title: <string>
+        description: <string>
+    purchase_options:
+      - purchase_option_id: <string>
+        state: active | inactive | draft
+        buy:                  # OR rent: { ... }
+          legacy_compatible: <bool>
+          multi_quantity_enabled: <bool>
+        new_regions:
+          usd_price: { currency_code: USD, units: <int>, nanos: <int> }
+          eur_price: { currency_code: EUR, units: <int>, nanos: <int> }
+          availability: available
+        regional_configs:
+          - region: US        # ISO-2
+            price: { currency_code: USD, units: 4, nanos: 990000000 }
+            availability: available
+        offer_tags: [<tag>, ...]
+        offers:               # optional, on-sale / pre-order treatments
+          - offer_id: <string>
+            state: active | inactive | draft
+            offer_tags: [<tag>, ...]
+            discounted: { start_time: ..., end_time: ..., redemption_limit: ... }
+            # OR: pre_order: { end_time, expected_release_time, price_change_behavior }
+            regional_configs:
+              - region: US
+                availability: available
+                absolute_discount: { currency_code: USD, units: 1, nanos: 0 }
+                # OR: relative_discount: 0.5  (50% off)
+                # OR: no_override: true       (use the purchase-option price as-is)
+    offer_tags: [<tag>, ...]  # product-level tags
+
+subscriptions:                # auto-renewing via monetization.subscriptions
+  <product_id>:
+    listings:
+      <lang>:
+        title: <string>
+        description: <string>
+        benefits: [<string>, ...]   # up to 4, shown on the Play sub sheet
+    base_plans:
+      - base_plan_id: <string>
+        state: active | inactive | draft
+        auto_renewing:              # OR prepaid: { billing_period }
+          billing_period: P1W | P1M | P3M | P6M | P1Y
+          grace_period:  P0D | P3D | P7D | P14D | P30D
+          legacy_compatible: <bool>
+        other_regions:              # USD/EUR fallback for new regions Play opens
+          usd_price: { currency_code: USD, units: <int>, nanos: <int> }
+          eur_price: { currency_code: EUR, units: <int>, nanos: <int> }
+          new_subscriber_availability: <bool>
+        regional_configs:
+          - region: US
+            price: { currency_code: USD, units: 4, nanos: 990000000 }
+            new_subscriber_availability: <bool>
+        offer_tags: [<tag>, ...]
+        offers:                     # intro offers, retention, promo, code-redemption
+          - offer_id: <string>
+            state: active | inactive | draft
+            offer_tags: [<tag>, ...]
+            targeting: { new_subscriber: <bool>, upgrade: <bool> }
+            phases:
+              - duration: P7D | P1M | P1Y | ...
+                recurrence_count: <int>
+                free: true          # OR one of:
+                price: { currency_code: USD, units: 1, nanos: 990000000 }
+                absolute_discount: { ... }
+                relative_discount: 0.5
+```
+
+## Field reference — one-time products
+
+| Field | Notes |
+|---|---|
+| `listings` | Map of BCP-47 lang code → `{ title, description }`. `title` ≤ 55 chars, `description` ≤ 200 |
+| `purchase_options[]` | Almost always one entry. Multiple is rare (buy + rent variants, tiered SKUs) |
+| `purchase_option_id` | Unique within the product. Immutable |
+| `state` | Output-only on patch — change via `iap state` |
+| `buy.legacy_compatible` | Marks this option as the one returned by deprecated PBL queries. Only one per product |
+| `new_regions.usd_price` + `eur_price` | Required when `new_regions` is present. Used for any region Play opens in future |
+| `regional_configs[].region` | ISO-2 alpha-2 code |
+| `regional_configs[].price.currency_code` | Must match the region's local currency (Play enforces) |
+
+## Field reference — subscriptions
+
+| Field | Notes |
+|---|---|
+| `listings.<lang>.benefits[]` | Up to 4 short strings, shown on the Play subscription sheet. Plain text |
+| `base_plans[]` | Multiple plans support upgrade ladders |
+| `base_plan_id` | Unique within the subscription. Immutable |
+| `auto_renewing` OR `prepaid` | Pick exactly one (mutually exclusive billing types) |
+| `billing_period` | ISO 8601 duration. Limited to `P1W`, `P1M`, `P3M`, `P6M`, `P1Y` |
+| `grace_period` | Optional. `P0D` / `P3D` / `P7D` / `P14D` / `P30D` |
+| `other_regions` | USD + EUR fallback for new regions Play opens |
+| `regional_configs[].price` | Per-region in local currency. Required for `new_subscriber_availability: true` |
+
+## Offers
+
+Offers attach to a base plan (sub) or purchase option (one-time). The split:
+
+### Subscription offers
+
+Multi-phase pricing ladder. Each phase is a duration + a treatment (`free`, `price`, `absolute_discount`, or `relative_discount`). Phases run in order; the offer ends when the last phase completes.
+
+```yaml
+offers:
+  - offer_id: welcome-trial
+    state: active
+    targeting: { new_subscriber: true }
+    phases:
+      - duration: P7D
+        recurrence_count: 1
+        free: true               # 7 days free
+      - duration: P1M
+        recurrence_count: 3
+        price: { currency_code: USD, units: 1, nanos: 990000000 }   # then $1.99/mo for 3 months
+```
+
+### One-time offers
+
+Either a discounted offer (limited-time discount on the purchase) or a pre-order. **Cannot set a flat price** — only discount the purchase-option price.
+
+```yaml
+offers:
+  - offer_id: launch-50
+    state: active
+    discounted:
+      start_time: 2026-01-01T00:00:00Z
+      end_time:   2026-01-31T23:59:59Z
+      redemption_limit: 1000     # 0 / omitted = unlimited
+    regional_configs:
+      - region: US
+        availability: available
+        relative_discount: 0.5   # 50% off
+      - region: GB
+        availability: available
+        absolute_discount: { currency_code: GBP, units: 2, nanos: 0 }
+```
+
+## Pricing model
+
+Play's pricing is **concrete per region**, not anchor + tier like Apple. Each `regional_configs` entry sets an explicit price in the region's local currency. The `new_regions` (one-time) or `other_regions` (subscriptions) block provides USD + EUR fallbacks for any region Play opens in future that's not in `regional_configs`.
+
+### Money values
+
+```yaml
+price:
+  currency_code: USD
+  units: 4               # whole-currency part
+  nanos: 990000000       # fractional, in 10^-9
+# → $4.99
+```
+
+The wire ships `units` as a string (the API permits values >2^53); the CLI accepts it as a number in YAML for readability and coerces on the way out.
+
+### Region codes
+
+ISO 3166-1 alpha-2: `US`, `GB`, `DE`, `FR`, `JP`, etc.
+
+Play enforces `currency_code` matches the region's local currency — `regional_configs: [{ region: GB, price: { currency_code: USD, ... } }]` will be rejected. The CLI doesn't validate client-side; the API will surface the error.
+
+## State lifecycle
+
+Every state-bearing entity (`purchase_options`, `base_plans`, `offers`) carries a `state` field. **Output-only on patch**: `iap sync` ignores it; `iap state` reconciles it via dedicated activate/deactivate endpoints.
+
+`draft` is a starting state for newly-created resources. You don't transition TO draft from CLI; if YAML says `draft`, `iap state` leaves it alone.
+
+## Round-trip fidelity
+
+`iap export` → `iap sync` is a no-op (zero divergence in `iap diff`). The exporter writes every field the syncer can push back. If you find a roundtrip that drifts, it's a bug.
+
+## What's NOT in this schema
+
+- **Subscription groups** — Play doesn't have them. Each subscription stands alone.
+- **Review screenshots** — Play doesn't require them like Apple does.
+- **`family_sharable`** — not a Play concept.
+- **Tier price points** — Play uses concrete prices, no tier table.
+
+---
+
+# Listings schema
+
+Source: https://zmij.github.io/playstore-cli/listings-schema
+
+# Listings YAML schema
+
+Per-language YAML lives at `<listings_dir>/listings/<lang>.yaml` (default `l10n/metadata/google/listings/<lang>.yaml` — the Lazy Sudoku historical split).
+
+One file per language. The lang code is BCP-47 (`en-GB`, `de-DE`, etc.); Play's locale matrix is shorter than Apple's.
+
+## Shape
+
+```yaml
+# l10n/metadata/google/listings/en-GB.yaml
+
+title: "Lazy Sudoku"
+short_description: "Solve smarter, not harder"
+full_description: |
+  The most relaxing sudoku app on the store.
+
+  • Classic + diagonal + jigsaw variants
+  • Apple Pencil-friendly note-taking
+  • Camera scanner for paper puzzles
+
+video: "https://www.youtube.com/watch?v=dQw4w9WgXcQ"   # optional, one per locale
+```
+
+## Field reference
+
+| YAML field | Play field | Limit | Notes |
+|---|---|---|---|
+| `title` | `title` | 30 chars | App name in the Play Store |
+| `short_description` | `shortDescription` | 80 chars | Tagline shown in search results |
+| `full_description` | `fullDescription` | 4000 chars | Markdown-ish — line breaks preserved, no formatting tags |
+| `video` | `video` | YouTube URL | One per locale; Play embeds it on the listing |
+
+Play silently truncates over-limit fields. Verify with `playstore listings show --lang <lang>` after a push.
+
+## Release notes (`whats_new`)
+
+Unlike Apple, Play's "What's New" lives **per-track-release**, not per-listing. The CLI loads release notes from separate Markdown files (one per language) by scanning `play-store-*.md` files in `<listings_dir>/`:
+
+```markdown
+<!-- l10n/metadata/google/play-store-en.md -->
+
+## What's New
+
+• Reworked solver
+• Faster startup
+• Bug fixes
+```
+
+The `tracks update` command parses the `## What's New` section out of each file and attaches the result to the release's `releaseNotes[]` array, one entry per language.
+
+To translate release notes, drop `play-store-<lang>.md` files alongside the English one (the filename's lang code maps to a Play locale via `LANGUAGE_MAP` in `src/types.ts`).
+
+## Multi-line values
+
+YAML's `|` literal-block syntax preserves line breaks. Use it for `full_description`:
+
+```yaml
+full_description: |
+  Paragraph one.
+
+  Paragraph two. **Bold not supported** — Play strips formatting.
+  Only line breaks survive.
+```
+
+## Per-locale strategy
+
+Each locale's file is independent. Common pattern:
+
+- `en-GB.yaml` is your authoritative copy.
+- Other locales are translations.
+- `short_description` is the highest-leverage field — it shows in search results. Translate carefully.
+- `video` can be the same YouTube URL across locales (Play doesn't auto-detect the user's preferred locale for YouTube playback) or different per-locale if you have translated reels.
+
+## Locale codes
+
+Play uses BCP-47 codes. Common ones:
+
+| Lang | Play locale |
+|---|---|
+| English (UK) | `en-GB` |
+| English (US) | `en-US` |
+| German | `de-DE` |
+| French | `fr-FR` |
+| Spanish (Spain) | `es-ES` |
+| Spanish (Latin America) | `es-419` |
+| Portuguese (Brazil) | `pt-BR` |
+| Portuguese (Portugal) | `pt-PT` |
+| Chinese (Simplified) | `zh-CN` |
+| Japanese | `ja-JP` |
+| Korean | `ko-KR` |
+| Arabic | `ar` |
+| Russian | `ru-RU` |
+| Hindi | `hi-IN` |
+| Indonesian | `id` |
+| Finnish | `fi-FI` |
+| Hebrew | `iw-IL`   (Play uses `iw`, not `he`, for legacy reasons) |
+
+Note the Hebrew quirk: Play's locale code is `iw-IL`, not `he-IL`. Use `iw-IL.yaml`.
+
+Add a language by creating `<lang>.yaml` and running `playstore listings update --lang <lang>`. The CLI creates the listing on Play if it doesn't exist.
+
+## Push paths
+
+```bash
+# Update everything from every per-locale YAML
+playstore listings update --all
+
+# One locale only
+playstore listings update --lang ja-JP
+
+# Dry-run first
+playstore listings update --all --dry-run
+```
+
+## Diff
+
+```bash
+playstore listings show --lang ja-JP
+# Compare against your local ja-JP.yaml manually for now;
+# a dedicated `listings diff` would mirror `iap diff` and is on the
+# follow-up list.
+```
+
+## Screenshots are separate
+
+`playstore screenshots` is its own command surface. Screenshots aren't part of listings YAML — they're binary uploads keyed by `(language, device_type)`:
+
+```bash
+playstore screenshots upload --source ./shots --all --mode replace
+```
+
+`./shots/<lang>/` should contain device-categorised files; filenames follow Play's convention (`phone-*`, `tablet7-*`, `tablet10-*` prefixes).
+
+---
+
+# Play quirks
+
+Source: https://zmij.github.io/playstore-cli/quirks
+
+# Play quirks
+
+Non-obvious behaviour from the Google Play Developer API that the CLI works around. Each entry includes what the API does, what we do about it, and what to remember when you go beyond the CLI.
+
+## 1. Legacy `inappproducts` API is dead
+
+For newer accounts, the legacy `inappproducts` resource (managed products via the pre-2023 API) returns **403 "Please migrate to the new publishing API"** on every call. The CLI uses `monetization.onetimeproducts` exclusively — the new API surface introduced in 2023.
+
+This required upgrading `googleapis` to ≥ 173.0.0 to get the `monetization.onetimeproducts` resource class.
+
+If you're reading old documentation or example code that uses `inappproducts.list()`, ignore it. The replacement is:
+
+- `monetization.onetimeproducts.list()`
+- `monetization.onetimeproducts.get(productId)`
+- `monetization.onetimeproducts.patch(productId, body, regionsVersion, allowMissing)`
+- `monetization.onetimeproducts.purchaseOptions.batchUpdateStates()`
+- `monetization.onetimeproducts.purchaseOptions.offers.{activate, deactivate, list}`
+
+## 2. Pricing is concrete per region, not anchor + tier
+
+Where Apple has a tier table you reference by ID, Play takes a literal `Money { currency_code, units, nanos }` per region. There's no "auto-equalise" mechanism beyond `newRegionsConfig` (USD + EUR fallback for any region Play opens in future that's not already in your `regionalConfigs`).
+
+This means a price change in YAML usually means editing many `regional_configs` entries — `iap export` writes them all explicitly. The deep-diff walker matches by `region` so reordering doesn't register as drift.
+
+Currency must match the region's local currency. `regional_configs: [{ region: GB, price: { currency_code: USD, ... } }]` is rejected by Play.
+
+## 3. Region codes are ISO-2
+
+`US`, `DE`, `GB`, `FR`, `JP` — not `USA`, `DEU`, `GBR` like Apple. If you're cross-porting from appstore-cli YAML, you'll need to map.
+
+## 4. No subscription groups
+
+Apple has `subscription_groups` (a sub belongs to a group; users can only have one sub per group at a time). Play has no such concept — each subscription stands alone. The YAML schema has no `subscription_groups` top-level.
+
+If you're migrating logic from Apple, upgrade ladders are implemented via **multiple base plans** within one subscription instead.
+
+## 5. One-time PURCHASE OPTIONS have no single activate/deactivate
+
+Sub base plans, sub offers, and one-time offers all have dedicated `activate` / `deactivate` endpoints. **One-time purchase options don't.** The only state-transition endpoint Play exposes is `monetization.onetimeproducts.purchaseOptions.batchUpdateStates`, which takes an array.
+
+The CLI's `iap state` handles batching transparently — you specify the YAML state and it figures out the right call. Don't try to flip a one-time purchase option's state with a per-item call; it doesn't exist.
+
+## 6. `regionsVersion` is required on every patch
+
+Play's regional catalogue evolves (new countries, currency tweaks). Every `patch` and `create` requires you to declare which catalogue version you're targeting via `regionsVersion.version`, like `"2025/03"`.
+
+Quirk: **one-time products return this in the GET response, but subscriptions don't**. The CLI's sync command resolves a shared default at startup by GETting the first YAML-listed one-time product, then uses that version for subscription patches too. `--regions-version` overrides.
+
+## 7. Newly-created subscriptions land in DRAFT
+
+When `iap create` creates a new subscription, every base plan and every offer on it lands in `DRAFT` state. They're **invisible to users** until you activate them.
+
+The success message reminds you. Use `iap state` to flip them, or use Play Console for the manual flip.
+
+This is Play's safety net — you can't accidentally ship a half-configured tier. Apple has no equivalent.
+
+## 8. `updateMask: '*'` is rejected
+
+Google's standard field-mask syntax accepts `*` as "all fields", but the Play monetization API specifically does NOT. You must enumerate the fields you want to update.
+
+The CLI's default updateMasks:
+
+- One-time products: `listings,purchaseOptions,offerTags`
+- Subscriptions: `listings,basePlans`
+
+If you add a new top-level field to the YAML schema, you must also add it to the updateMask string in `src/client.ts` `upsertOneTimeProduct` / `upsertSubscription`, or the field will be ignored on push.
+
+## 9. One-time offers can't set a flat price
+
+Subscription offer phases support `free`, `price`, `absolute_discount`, OR `relative_discount`. One-time offers support only `absolute_discount`, `relative_discount`, OR `no_override`. **No flat-price override.**
+
+The YAML schema reflects this: one-time `offers[].regional_configs[]` doesn't accept `price`. Setting one in YAML will produce a typecheck error.
+
+## 10. Two price shapes on the wire
+
+The new monetization API uses `Schema$Money { currencyCode, units, nanos }`. The dead-but-still-typed `inappproducts` API uses `Schema$Price { currency, priceMicros }`. Don't accidentally re-introduce the legacy shape — `client.ts` canonicalises everything to `Money` because that's what the monetization API speaks.
+
+If you see `priceMicros` in code, it's old or wrong.
+
+## 11. `client.deleteEdit()` after every read-only edit-session call
+
+Some Play endpoints (listings, tracks, images) require an edit session: you start an edit, do work, then either commit or delete. The CLI's read commands start an edit implicitly when needed (`listListings`, `listTracks`, `listScreenshots`).
+
+**If the read path doesn't commit, you must `deleteEdit()` afterwards.** Otherwise the edit accumulates as a pending change in Play Console, visible to other operators. The MCP server does this religiously after every read; the CLI mostly doesn't because each command run is short and the edit gets garbage-collected by Play after a while — but it's still good hygiene.
+
+## 12. Worktree vs project root
+
+Same setup as appstore-cli:
+
+- **Project root** — the main repo. Where secrets live (`.secret-stuff/playstore-config.yaml`). Shared across worktrees.
+- **Worktree root** — the current branch's working directory. Where metadata lives. Per-branch.
+
+If you're not using worktrees, both roots are the same — nothing to think about.
+
+## 13. The historical metadata split
+
+This is a Lazy-Sudoku-specific quirk preserved by the defaults: IAP YAML lives at `l10n/metadata/play/iap.yaml`, but listings + screenshots + release notes live at `l10n/metadata/google/...`. The CLI has separate `metadata_dir` and `listings_dir` knobs because of this.
+
+Greenfield projects should set both to the same directory in `playstore-cli.config.yaml`:
+
+```yaml
+metadata_dir: store-metadata/play
+listings_dir: store-metadata/play   # unify
+```
+
+When this package is extracted to its own repo, consider flipping the default so `listings_dir` matches `metadata_dir` and the split is a downstream override rather than the default.
+
+---

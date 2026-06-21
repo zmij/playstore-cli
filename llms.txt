@@ -1,0 +1,30 @@
+# playstore-flow
+
+> CLI + bundled MCP server for managing Android Google Play Console metadata, one-time products, subscriptions (base plans + offers), and listings from YAML files. Designed for teams that want their store presence under version control instead of click-driven through the Play Console.
+
+Install: `npm install -g playstore-flow`. Two binaries land on `$PATH`: `playstore` (CLI, commander.js) and `playstore-mcp` (Model Context Protocol server, stdio). Both wrap the same client code over the new `monetization.*` Android Publisher v3 API surface. The GitHub repo is `zmij/playstore-cli` (legacy slug from before the npm rebrand to `playstore-flow`).
+
+Battle-tested on [Lazy Sudoku](https://lazy-sudoku.online) — 14-language listings, 9 one-time products + 3 subscriptions with monthly/annual base plans, edit-session orchestration and per-region price migration handled.
+
+## Docs
+
+- [Home](https://zmij.github.io/playstore-cli/index.md): What it does, key features, install snippet, in-production note.
+- [Get started](https://zmij.github.io/playstore-cli/getting-started.md): 5-minute walkthrough — install, create a Play service account, drop the config, pull live state into YAML, edit, sync back, optional MCP wire-up.
+- [Authentication](https://zmij.github.io/playstore-cli/auth.md): Service-account JSON, Play Console role granting, env-var overrides (`PLAYSTORE_SECRETS_DIR`, `PLAYSTORE_METADATA_DIR`, `PLAYSTORE_LISTINGS_DIR`, `GOOGLE_PLAY_KEY_FILE`).
+- [Workflow](https://zmij.github.io/playstore-cli/workflow.md): Full export → edit → sync → pull → reconcile loop, plus `iap create`, `iap state` (activate / deactivate base plans + offers), and `iap migrate-prices` paths.
+
+## Reference
+
+- [IAP schema](https://zmij.github.io/playstore-cli/iap-schema.md): YAML schema for `iap.yaml` — one-time products, subscriptions, base plans, offers, regional configs (`Money` per region + `new_regions` fallback), offer phase ladders.
+- [Listings schema](https://zmij.github.io/playstore-cli/listings-schema.md): Per-language `listings/<lang>.yaml` shape; title (50) / short_description (80) / full_description (4000) / release_notes (500) limits.
+- [Play quirks](https://zmij.github.io/playstore-cli/quirks.md): Non-obvious Play-side gotchas the CLI works around — `regionsVersion` required on every patch, `monetization.*` vs the dead `inappproducts` API, two price shapes on the wire (`Money` vs legacy `Price`), edit-session discipline (`deleteEdit()` after every read), `batchUpdateStates` for one-time purchase options, newly-created subscriptions land in DRAFT until activated.
+
+## Source + MCP
+
+- [GitHub repo](https://github.com/zmij/playstore-cli) — issues, PRs, releases.
+- [README](https://github.com/zmij/playstore-cli/blob/master/README.md) — install, command reference, full MCP setup (Claude Code + other clients), Configuration table covering the three independent path knobs.
+- [CLAUDE.md](https://github.com/zmij/playstore-cli/blob/master/CLAUDE.md) — agent-facing development notes; rules and layout for contributing changes to the CLI / client / MCP server.
+
+## Optional
+
+- [Full content](https://zmij.github.io/playstore-cli/llms-full.txt): All docs concatenated into a single file for one-shot ingestion.
