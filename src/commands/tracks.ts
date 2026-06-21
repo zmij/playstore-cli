@@ -10,7 +10,7 @@ import { join } from 'path';
 import type { Command } from 'commander';
 import chalk from 'chalk';
 import { createClient } from '../client.js';
-import { getWorktreeRoot } from '../auth.js';
+import { getTracksBaseDir } from '../paths.js';
 import { LANGUAGE_MAP } from '../types.js';
 
 /**
@@ -18,8 +18,9 @@ import { LANGUAGE_MAP } from '../types.js';
  * Returns release notes keyed by Google Play locale.
  */
 function loadReleaseNotesFromMetadata(): Array<{ language: string; text: string }> {
-  const root = getWorktreeRoot();
-  const metadataDir = join(root, 'l10n', 'metadata', 'google');
+  // Resolves to {listings_dir} — same tree as listings + screenshots
+  // (configurable via playstore-cli.config.yaml or PLAYSTORE_LISTINGS_DIR).
+  const metadataDir = getTracksBaseDir();
   const notes: Array<{ language: string; text: string }> = [];
 
   const files = readdirSync(metadataDir).filter(

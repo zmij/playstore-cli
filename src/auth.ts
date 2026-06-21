@@ -1,14 +1,25 @@
 /**
  * Google Play Console Authentication
  *
- * Handles service account authentication for Google Play Developer API.
+ * Handles service account authentication for the Google Play
+ * Developer API. Loads config from the configured secrets directory
+ * (default `.secret-stuff/`, override via `playstore-cli.config.yaml`
+ * or `PLAYSTORE_SECRETS_DIR`).
+ *
+ * Path discovery (git roots, config-file lookup) lives in
+ * `./project.ts` and `./paths.ts` to avoid circular imports.
  */
 
-import { execSync } from 'child_process';
 import { existsSync, readFileSync } from 'fs';
-import { join, dirname } from 'path';
+import { join } from 'path';
 import { parse as parseYaml } from 'yaml';
 import type { PlayStoreConfig } from './types.js';
+import { getSecretsDir as resolveSecretsDir } from './paths.js';
+
+// Re-export for back-compat — auth.ts was the original public source.
+export { getProjectRoot, getWorktreeRoot } from './project.js';
+
+const CONFIG_FILE = 'playstore-config.yaml';
 
 export interface AuthContext {
   packageName: string;
@@ -16,56 +27,28 @@ export interface AuthContext {
 }
 
 /**
- * Get the git worktree root directory
+ * Get the secrets directory.
+ *
+ * Re-exported from paths.ts. Configurable via
+ * `playstore-cli.config.yaml` (`secrets_dir: ...`) at the project
+ * root, or `PLAYSTORE_SECRETS_DIR`. Default `.secret-stuff/` at the
+ * project root.
  */
-export function getWorktreeRoot(): string {
-  try {
-    return execSync('git rev-parse --show-toplevel', { encoding: 'utf-8' }).trim();
-  } catch {
-    throw new Error('Not in a git repository');
-  }
+export function getSecretsDir(): string {
+  return resolveSecretsDir();
 }
 
 /**
- * Get the project root (parent of worktree if in a worktree)
- */
-export function getProjectRoot(): string {
-  const worktreeRoot = getWorktreeRoot();
-
-  // Check if this is a worktree by looking for .git file (not directory)
-  const gitPath = join(worktreeRoot, '.git');
-  try {
-    const stat = execSync(`file "${gitPath}"`, { encoding: 'utf-8' });
-    if (stat.includes('ASCII text')) {
-      // It's a worktree, .git is a file pointing to the main repo
-      const gitContent = readFileSync(gitPath, 'utf-8').trim();
-      const match = gitContent.match(/gitdir: (.+)/);
-      if (match) {
-        // Path like: /path/to/main/.git/worktrees/backend
-        // We want: /path/to/main
-        const gitDir = match[1];
-        const mainGitDir = gitDir.replace(/\/\.git\/worktrees\/.*$/, '');
-        return mainGitDir;
-      }
-    }
-  } catch {
-    // Not a worktree, use worktree root as project root
-  }
-
-  return worktreeRoot;
-}
-
-/**
- * Load Play Store configuration from .secret-stuff/playstore-config.yaml
+ * Load Play Store configuration from the secrets directory.
  */
 export function loadConfig(): PlayStoreConfig {
-  const projectRoot = getProjectRoot();
-  const configPath = join(projectRoot, '.secret-stuff', 'playstore-config.yaml');
+  const secretsDir = getSecretsDir();
+  const configPath = join(secretsDir, CONFIG_FILE);
 
   if (!existsSync(configPath)) {
     throw new Error(
       `Configuration not found: ${configPath}\n` +
-        'Please create playstore-config.yaml with:\n' +
+        `Please create ${CONFIG_FILE} in ${secretsDir}/ with:\n` +
         '  package_name: "your.package.name"\n' +
         '  service_account_key: "service-account.json"'
     );
@@ -76,19 +59,17 @@ export function loadConfig(): PlayStoreConfig {
 }
 
 /**
- * Get authentication context
+ * Get authentication context.
  *
- * Key discovery order:
- * 1. --key-file CLI flag
- * 2. GOOGLE_PLAY_KEY_FILE environment variable
- * 3. Config file service_account_key (relative to .secret-stuff/)
+ * Service-account key discovery:
+ *   1. `--key-file` CLI flag (caller-supplied override)
+ *   2. `GOOGLE_PLAY_KEY_FILE` env var
+ *   3. Config file `service_account_key` (relative to secrets dir)
  */
 export function getAuthContext(keyFileOverride?: string): AuthContext {
   const config = loadConfig();
-  const projectRoot = getProjectRoot();
-  const secretsDir = join(projectRoot, '.secret-stuff');
+  const secretsDir = getSecretsDir();
 
-  // Determine key file path
   let keyFilePath: string;
 
   if (keyFileOverride) {
@@ -99,7 +80,6 @@ export function getAuthContext(keyFileOverride?: string): AuthContext {
     keyFilePath = join(secretsDir, config.service_account_key);
   }
 
-  // Verify key file exists
   if (!existsSync(keyFilePath)) {
     throw new Error(`Service account key file not found: ${keyFilePath}`);
   }

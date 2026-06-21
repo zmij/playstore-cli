@@ -622,12 +622,10 @@ export function registerIapCommands(program: Command): void {
     .action(async (options) => {
       try {
         const { readFileSync, existsSync } = await import('fs');
-        const { join } = await import('path');
         const { parse: parseYaml } = await import('yaml');
-        const { getWorktreeRoot } = await import('../auth.js');
+        const { getIapYamlPath } = await import('../paths.js');
 
-        const yamlPath = options.input
-          ?? join(getWorktreeRoot(), 'l10n', 'metadata', 'play', 'iap.yaml');
+        const yamlPath = options.input ?? getIapYamlPath();
         if (!existsSync(yamlPath)) {
           console.error(chalk.red(`IAP metadata file not found: ${yamlPath}`));
           console.error(chalk.yellow(`First-time setup? Run \`playstore iap export --output ${yamlPath}\` to seed it.`));
@@ -743,12 +741,10 @@ export function registerIapCommands(program: Command): void {
     .action(async (options) => {
       try {
         const { readFileSync, existsSync } = await import('fs');
-        const { join } = await import('path');
         const { parse: parseYaml } = await import('yaml');
-        const { getWorktreeRoot } = await import('../auth.js');
+        const { getIapYamlPath } = await import('../paths.js');
 
-        const yamlPath = options.input
-          ?? join(getWorktreeRoot(), 'l10n', 'metadata', 'play', 'iap.yaml');
+        const yamlPath = options.input ?? getIapYamlPath();
         if (!existsSync(yamlPath)) {
           console.error(chalk.red(`IAP metadata file not found: ${yamlPath}`));
           process.exit(1);
@@ -872,12 +868,10 @@ export function registerIapCommands(program: Command): void {
     .action(async (options) => {
       try {
         const { readFileSync, existsSync } = await import('fs');
-        const { join } = await import('path');
         const { parse: parseYaml } = await import('yaml');
-        const { getWorktreeRoot } = await import('../auth.js');
+        const { getIapYamlPath } = await import('../paths.js');
 
-        const yamlPath = options.input
-          ?? join(getWorktreeRoot(), 'l10n', 'metadata', 'play', 'iap.yaml');
+        const yamlPath = options.input ?? getIapYamlPath();
         if (!existsSync(yamlPath)) {
           console.error(chalk.red(`IAP metadata file not found: ${yamlPath}`));
           process.exit(1);
@@ -1192,11 +1186,10 @@ export function registerIapCommands(program: Command): void {
     .action(async (options) => {
       try {
         const { readFileSync, writeFileSync, existsSync } = await import('fs');
-        const { join } = await import('path');
         const { parseDocument } = await import('yaml');
-        const { getWorktreeRoot } = await import('../auth.js');
+        const { getIapYamlPath } = await import('../paths.js');
 
-        const yamlPath = join(getWorktreeRoot(), 'l10n', 'metadata', 'play', 'iap.yaml');
+        const yamlPath = getIapYamlPath();
         if (!existsSync(yamlPath)) {
           console.error(chalk.red(`IAP metadata file not found: ${yamlPath}`));
           console.error(chalk.yellow(`First-time setup? Run \`playstore iap export --output ${yamlPath}\` to seed it.`));
@@ -1237,11 +1230,10 @@ export function registerIapCommands(program: Command): void {
     .action(async (options) => {
       try {
         const { readFileSync, existsSync } = await import('fs');
-        const { join } = await import('path');
         const { parse: parseYaml } = await import('yaml');
-        const { getWorktreeRoot } = await import('../auth.js');
+        const { getIapYamlPath } = await import('../paths.js');
 
-        const yamlPath = join(getWorktreeRoot(), 'l10n', 'metadata', 'play', 'iap.yaml');
+        const yamlPath = getIapYamlPath();
         if (!existsSync(yamlPath)) {
           console.error(chalk.red(`IAP metadata file not found: ${yamlPath}`));
           process.exit(1);

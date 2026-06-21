@@ -8,6 +8,7 @@ import type { Command } from 'commander';
 import chalk from 'chalk';
 import { createClient } from '../client.js';
 import { getWorktreeRoot } from '../auth.js';
+import { getListingsDir } from '../paths.js';
 import { LANGUAGE_MAP, LOCALE_TO_SHORT } from '../types.js';
 import type { ListingMetadata } from '../types.js';
 
@@ -124,8 +125,9 @@ export function registerListingsCommands(program: Command): void {
         }
 
         const client = createClient(options.keyFile);
-        const worktreeRoot = getWorktreeRoot();
-        const listingsDir = join(worktreeRoot, 'l10n', 'metadata', 'google', 'listings');
+        // Resolves to {listings_dir}/listings (configurable via
+        // playstore-cli.config.yaml or PLAYSTORE_LISTINGS_DIR).
+        const listingsDir = getListingsDir();
 
         if (!existsSync(listingsDir)) {
           console.error(chalk.red(`Listings directory not found: ${listingsDir}`));

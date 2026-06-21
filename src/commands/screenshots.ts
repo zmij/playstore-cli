@@ -7,7 +7,7 @@
 import type { Command } from 'commander';
 import chalk from 'chalk';
 import { createClient } from '../client.js';
-import { getWorktreeRoot } from '../auth.js';
+import { getScreenshotsOrderPath } from '../paths.js';
 import { LANGUAGE_MAP, LOCALE_EXPAND, DEVICE_TYPE_MAP, LOCALE_TO_SHORT } from '../types.js';
 import type { ParsedScreenshotFilename, ScreenshotUploadMode } from '../types.js';
 
@@ -183,9 +183,10 @@ export function registerScreenshotsCommands(program: Command): void {
           byLanguage.set(p.language, existing);
         }
 
-        // Load order configuration if exists
-        const worktreeRoot = getWorktreeRoot();
-        const orderPath = join(worktreeRoot, 'l10n', 'metadata', 'google', 'screenshots', 'order.yaml');
+        // Load order configuration if exists (resolves to
+        // {listings_dir}/screenshots/order.yaml — configurable via
+        // playstore-cli.config.yaml or PLAYSTORE_LISTINGS_DIR).
+        const orderPath = getScreenshotsOrderPath();
         let order: string[] = [];
         if (existsSync(orderPath)) {
           const orderContent = readFileSync(orderPath, 'utf-8');
