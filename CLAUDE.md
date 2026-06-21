@@ -95,9 +95,9 @@ If you need a fourth configurable directory:
 
 ## When extracted to its own repo
 
-The extraction is a `git filter-branch --subdirectory-filter playstore-cli` (or `git subtree split`). The package is self-contained:
+The extraction is a `git filter-branch --subdirectory-filter tools/playstore-cli` (or `git subtree split`). The package is self-contained:
 
-- No imports from outside `playstore-cli/`.
+- No imports from outside `tools/playstore-cli/`.
 - Auth + paths configurable via files in any git repo.
 - README + this CLAUDE.md travel with it.
 - The bundled MCP makes the package useful as a standalone tool from day one.
