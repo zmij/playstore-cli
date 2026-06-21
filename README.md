@@ -136,13 +136,92 @@ Modes: `replace` (drop + re-upload), `add` (append).
 
 ## MCP Server
 
-The package ships a bundled MCP server using the same client code as the CLI:
+The package ships a bundled MCP server (`playstore-mcp`) using the same client code as the CLI. Any MCP-aware agent — Claude Code, Cursor, Windsurf, Cline, Continue, Zed — can talk to it over stdio.
+
+### Prerequisites
+
+`playstore-mcp` must be on `$PATH`. The [Install](#install) step puts it there (either `npm install -g playstore-cli` or `npm link` from a checkout). Verify:
 
 ```bash
+which playstore-mcp
+```
+
+If you'd rather not install globally, register an absolute path instead — see below.
+
+### Register with Claude Code
+
+```bash
+# Run from the project whose Play listing you manage — that becomes the
+# server's working directory, which is where config + metadata YAMLs are
+# resolved from. See "Working directory and auth" below.
 claude mcp add playstore playstore-mcp
 ```
 
-Tools exposed:
+`claude mcp add` defaults to **local** scope (your account, this directory). Pick the scope that fits:
+
+| Scope | Where it's stored | Use when |
+|---|---|---|
+| `--scope local` (default) | `~/.claude.json`, keyed by cwd | Personal experiments in one repo |
+| `--scope project` | `<repo>/.mcp.json` (committed) | Everyone in the repo gets it |
+| `--scope user` | `~/.claude.json` global | You want it everywhere |
+
+If you skipped `npm link`, register the build output directly:
+
+```bash
+claude mcp add playstore node /absolute/path/to/playstore-cli/build/mcp/server.js
+```
+
+### Register with other MCP clients
+
+Clients that read a JSON config (Cursor, Windsurf, Cline, Continue, Zed, …) take this shape. Point `command` at the binary on `$PATH`, or use an absolute path:
+
+```json
+{
+  "mcpServers": {
+    "playstore": {
+      "command": "playstore-mcp"
+    }
+  }
+}
+```
+
+Consult your client's docs for *where* this config file lives — common paths are `~/.cursor/mcp.json`, `~/.codeium/windsurf/mcp_config.json`, or a workspace-level file.
+
+### Working directory and auth
+
+The MCP server inherits its **working directory** from the client that spawns it. Path resolution (where `playstore-config.yaml`, the service-account JSON, and the metadata / listings YAMLs live) starts from `git rev-parse --show-toplevel` of that cwd, with one refinement: when the server detects it's running inside a git submodule (via `git rev-parse --show-superproject-working-tree`), it resolves paths against the parent worktree instead of the submodule's own root.
+
+Practical implications:
+
+- Launch your MCP client from the repo whose Play listing you manage. The server then finds `.secret-stuff/playstore-config.yaml` + the service-account JSON, and the metadata + listings YAMLs from there.
+- If your client launches from somewhere else, override paths via env vars passed through the client config:
+
+```json
+{
+  "mcpServers": {
+    "playstore": {
+      "command": "playstore-mcp",
+      "env": {
+        "PLAYSTORE_SECRETS_DIR": "/abs/path/to/secrets",
+        "PLAYSTORE_METADATA_DIR": "/abs/path/to/metadata",
+        "PLAYSTORE_LISTINGS_DIR": "/abs/path/to/listings"
+      }
+    }
+  }
+}
+```
+
+See [Configuration](#configuration) for the full env var list — the three knobs are independent because Play splits IAP YAML and listings/screenshots across two directories by default.
+
+### Verify
+
+```bash
+claude mcp list
+```
+
+Then in a session, ask the agent to call `playstore_get_app_info` — the first tool call confirms wiring. An "auth failed" error means wiring is fine and you just need a valid `playstore-config.yaml`.
+
+### Tools exposed
 
 | Tool | Description |
 |---|---|
