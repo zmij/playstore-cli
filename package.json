@@ -1,7 +1,11 @@
 {
-  "name": "playstore-cli",
+  "name": "playstore-flow",
   "version": "1.0.0",
-  "description": "CLI + MCP server for managing Google Play Console metadata, screenshots, in-app products, and subscriptions",
+  "description": "Google Play Console from your terminal — manage Android listings, in-app products, and subscriptions from YAML files. CLI + bundled MCP server.",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "type": "module",
   "main": "build/index.js",
   "bin": {

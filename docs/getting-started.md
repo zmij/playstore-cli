@@ -5,7 +5,7 @@ A 5-minute walkthrough from zero to your first round-tripped Play listing.
 ## 1. Install
 
 ```bash
-npm install -g playstore-cli
+npm install -g playstore-flow
 ```
 
 Two binaries land on your `PATH`:
