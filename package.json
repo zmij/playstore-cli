@@ -8,10 +8,35 @@
     "playstore": "./build/index.js",
     "playstore-mcp": "./build/mcp/server.js"
   },
+  "files": [
+    "build"
+  ],
   "scripts": {
     "build": "tsc",
-    "start": "node build/index.js"
+    "start": "node build/index.js",
+    "dev": "npm run build && npm run start",
+    "watch": "tsc --watch"
   },
+  "keywords": [
+    "playstore",
+    "google-play",
+    "android",
+    "metadata",
+    "screenshots",
+    "iap",
+    "subscriptions",
+    "mcp"
+  ],
+  "author": "Sergei Fedorov",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zmij/playstore-cli.git"
+  },
+  "bugs": {
+    "url": "https://github.com/zmij/playstore-cli/issues"
+  },
+  "homepage": "https://github.com/zmij/playstore-cli#readme",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
     "chalk": "^5.3.0",
@@ -22,5 +47,8 @@
   "devDependencies": {
     "@types/node": "^22.0.0",
     "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
