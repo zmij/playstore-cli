@@ -2,9 +2,9 @@ import { defineConfig } from 'vitepress';
 
 // https://vitepress.dev/reference/site-config
 export default defineConfig({
-  title: 'playstore-cli',
+  title: 'playstore-flow',
   description:
-    'CLI + bundled MCP server for managing Google Play Console metadata, in-app products, and subscriptions from YAML files.',
+    'Google Play Console from your terminal — manage Android listings, in-app products, and subscriptions from YAML files. CLI + bundled MCP server.',
 
   // The site deploys at https://zmij.github.io/playstore-cli/ — every
   // generated link is prefixed by `base`. Switching to a custom domain
@@ -17,7 +17,7 @@ export default defineConfig({
   head: [
     ['link', { rel: 'icon', href: '/playstore-cli/favicon.svg', type: 'image/svg+xml' }],
     ['meta', { name: 'theme-color', content: '#34a853' }],
-    ['meta', { property: 'og:title', content: 'playstore-cli' }],
+    ['meta', { property: 'og:title', content: 'playstore-flow' }],
     ['meta', { property: 'og:type', content: 'website' }],
     [
       'meta',
@@ -48,7 +48,7 @@ export default defineConfig({
       {
         text: 'Introduction',
         items: [
-          { text: 'What is playstore-cli?', link: '/' },
+          { text: 'What is playstore-flow?', link: '/' },
           { text: 'Get started', link: '/getting-started' },
         ],
       },

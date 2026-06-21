@@ -1,8 +1,8 @@
-# playstore-cli
+# playstore-flow
 
 > CLI + bundled MCP server for managing Android Google Play Console metadata, one-time products, subscriptions (base plans + offers), and listings from YAML files. Designed for teams that want their store presence under version control instead of click-driven through the Play Console.
 
-Two binaries from one `npm install`: `playstore` (CLI, commander.js) and `playstore-mcp` (Model Context Protocol server, stdio). Both wrap the same client code over the new `monetization.*` Android Publisher v3 API surface.
+Install: `npm install -g playstore-flow`. Two binaries land on `$PATH`: `playstore` (CLI, commander.js) and `playstore-mcp` (Model Context Protocol server, stdio). Both wrap the same client code over the new `monetization.*` Android Publisher v3 API surface. The GitHub repo is `zmij/playstore-cli` (legacy slug from before the npm rebrand to `playstore-flow`).
 
 Battle-tested on [Lazy Sudoku](https://lazy-sudoku.online) — 14-language listings, 9 one-time products + 3 subscriptions with monthly/annual base plans, edit-session orchestration and per-region price migration handled.
 

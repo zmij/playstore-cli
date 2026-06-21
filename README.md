@@ -1,8 +1,10 @@
-# playstore-cli
+# playstore-flow
 
 A CLI + bundled MCP server for managing **Google Play Console** metadata, screenshots, one-time products, and subscriptions from YAML files. Designed for teams that want their store listing under version control instead of click-driven through the Play Console website.
 
 📖 **Documentation: <https://zmij.github.io/playstore-cli/>** (`llms.txt` available for agents at [`/llms.txt`](https://zmij.github.io/playstore-cli/llms.txt))
+
+> **Naming note.** The npm package is **`playstore-flow`**. The GitHub repo is `zmij/playstore-cli` and the docs site lives at `zmij.github.io/playstore-cli/` — slugs kept from before the rebrand so existing links keep working. The local config filename `playstore-cli.config.yaml` is also a legacy holdover.
 
 What it does:
 
@@ -20,8 +22,10 @@ Same code is exposed as an [MCP server](#mcp-server) so an agent can read/list P
 ## Install
 
 ```bash
-npm install -g playstore-cli
-# or, from a checkout
+npm install -g playstore-flow
+# or, from a checkout (the GitHub repo is still `playstore-cli` — only the
+# npm package name has been rebranded to `playstore-flow`):
+git clone https://github.com/zmij/playstore-cli.git
 cd playstore-cli && npm install && npm run build && npm link
 ```
 
@@ -142,7 +146,7 @@ The package ships a bundled MCP server (`playstore-mcp`) using the same client c
 
 ### Prerequisites
 
-`playstore-mcp` must be on `$PATH`. The [Install](#install) step puts it there (either `npm install -g playstore-cli` or `npm link` from a checkout). Verify:
+`playstore-mcp` must be on `$PATH`. The [Install](#install) step puts it there (either `npm install -g playstore-flow` or `npm link` from a checkout). Verify:
 
 ```bash
 which playstore-mcp
@@ -281,7 +285,7 @@ For human contributors: PRs welcome. Run `npx tsc --noEmit` to typecheck. There 
 >
 > — *Sergei Fedorov, [Lazy Sudoku](https://lazy-sudoku.online)*
 
-Using playstore-cli somewhere? Open a PR adding yourself to this section.
+Using playstore-flow somewhere? Open a PR adding yourself to this section.
 
 ## Licence
 

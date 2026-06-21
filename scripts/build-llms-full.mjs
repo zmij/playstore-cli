@@ -18,7 +18,7 @@ const SITE = 'https://zmij.github.io/playstore-cli';
 
 // Page order matches the VitePress sidebar in docs/.vitepress/config.ts.
 const PAGES = [
-  { file: 'index.md', title: 'What is playstore-cli?', slug: '/' },
+  { file: 'index.md', title: 'What is playstore-flow?', slug: '/' },
   { file: 'getting-started.md', title: 'Get started', slug: '/getting-started' },
   { file: 'auth.md', title: 'Authentication', slug: '/auth' },
   { file: 'workflow.md', title: 'Workflow', slug: '/workflow' },
@@ -35,10 +35,12 @@ function stripFrontmatter(source) {
 }
 
 const header = [
-  '# playstore-cli — full documentation',
+  '# playstore-flow — full documentation',
   '',
-  'Single-file concatenation of every page on the playstore-cli docs site,',
+  'Single-file concatenation of every page on the playstore-flow docs site,',
   `for one-shot LLM ingestion. Live site: ${SITE}/`,
+  '',
+  'Install: npm install -g playstore-flow (GitHub repo lives at zmij/playstore-cli).',
   '',
   'Page index:',
   ...PAGES.map((p) => `- ${p.title} — ${SITE}${p.slug === '/' ? '/' : p.slug}`),
