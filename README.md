@@ -273,6 +273,14 @@ See [CLAUDE.md](CLAUDE.md) for agent-facing development notes.
 
 For human contributors: PRs welcome. Run `npx tsc --noEmit` to typecheck. There are no unit tests yet — verify against a real Play account via `--dry-run` flags first.
 
+## Adopters
+
+> I built this to manage [Lazy Sudoku](https://lazy-sudoku.com)'s Play Console — 14-locale listings, plus the full IAP catalogue (9 one-time products + 3 subscriptions with monthly/annual base plans) committed as YAML and synced via `playstore iap sync`. The bundled MCP server lets Claude Code read live Play state during release prep without me leaving the terminal. Everything goes through PRs; nothing happens by clicking through the Play Console.
+>
+> — *Sergei Fedorov, [Lazy Sudoku](https://lazy-sudoku.com)*
+
+Using playstore-cli somewhere? Open a PR adding yourself to this section.
+
 ## Licence
 
 MIT.
