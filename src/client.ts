@@ -659,6 +659,48 @@ export class PlayStoreClient {
     });
   }
 
+  /** Convert a single anchor price into per-region prices via Play's
+   *  `monetization.convertRegionPrices`. The endpoint returns a map of
+   *  region code → `{ price, taxAmount }` covering every region Play
+   *  currently supports for that catalog version — same conversion the
+   *  Play Console runs when you type one USD price and watch the
+   *  per-country grid fill in.
+   *
+   *  Returned `Schema$Money` values are **tax inclusive** (Play's
+   *  customer-facing price). The request anchor is tax exclusive, per
+   *  Play's API contract. We surface the per-region tax-inclusive price
+   *  directly because it's what `regional_configs[].price` expects on
+   *  the patch payload.
+   *
+   *  Used by `iap create`/`sync` to expand a YAML purchase option whose
+   *  `new_regions` carries only a USD anchor into the explicit
+   *  `regional_configs` Play needs for the current ~173 markets to
+   *  carry a price — without that expansion, the product creates as
+   *  DRAFT with no price (see issue #2428).
+   */
+  async convertRegionPrices(
+    anchor: androidpublisher_v3.Schema$Money,
+  ): Promise<{
+    perRegion: Map<string, androidpublisher_v3.Schema$Money>;
+    otherRegionsUsd?: androidpublisher_v3.Schema$Money;
+    otherRegionsEur?: androidpublisher_v3.Schema$Money;
+  }> {
+    const res = await this.publisher.monetization.convertRegionPrices({
+      packageName: this.packageName,
+      requestBody: { price: anchor },
+    });
+    const perRegion = new Map<string, androidpublisher_v3.Schema$Money>();
+    const map = res.data.convertedRegionPrices ?? {};
+    for (const [regionCode, entry] of Object.entries(map)) {
+      if (entry?.price) perRegion.set(regionCode, entry.price);
+    }
+    return {
+      perRegion,
+      otherRegionsUsd: res.data.convertedOtherRegionsPrice?.usdPrice ?? undefined,
+      otherRegionsEur: res.data.convertedOtherRegionsPrice?.eurPrice ?? undefined,
+    };
+  }
+
   /** Bulk update purchase-option states. The only state-transition
    *  endpoint Play exposes for one-time purchase options — there's no
    *  single activate / deactivate. Pass an array of `{ purchase_option_id,

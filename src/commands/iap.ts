@@ -342,6 +342,80 @@ function oneTimeProductToWire(yamlProduct: OneTimeProduct): Schema$OneTimeProduc
   };
 }
 
+/**
+ * Pre-create / pre-sync price expansion.
+ *
+ * Play's `monetization.onetimeproducts.patch` accepts a `newRegionsConfig`
+ * (an anchor pair USD + EUR) AND a `regionalPricingAndAvailabilityConfigs`
+ * (per-region rows for the current ~173 markets). They serve different
+ * purposes — `newRegionsConfig` ONLY kicks in for future regions Play adds;
+ * existing markets need explicit per-region rows or the product creates as
+ * DRAFT with no price.
+ *
+ * Mutates each purchase option in place:
+ *   - If `regional_configs` already carries entries → leave as-is (the
+ *     YAML author was explicit).
+ *   - Else if `new_regions.usd_price` is set → call
+ *     `client.convertRegionPrices(usd)` to fan out to every current
+ *     market and populate `regional_configs` from the response. Each
+ *     synthesised row inherits `new_regions.availability` if set.
+ *   - Else → throw with a clear "no current-region price source" error
+ *     (was silent in the original bug — see #2428).
+ *
+ * Done in-memory; nothing is written back to YAML. The user can capture
+ * the synthesised rows by running `iap pull` afterwards if they want
+ * the YAML to carry them explicitly.
+ */
+async function expandOneTimeProductPricing(
+  productId: string,
+  purchases: PlayIAPMetadata['purchases'][string],
+  client: PlayStoreClient,
+): Promise<void> {
+  for (const po of purchases.purchase_options) {
+    if (po.regional_configs && po.regional_configs.length > 0) continue;
+    if (!po.new_regions?.usd_price) {
+      throw new Error(
+        `Product '${productId}' purchase option '${po.purchase_option_id}' has neither ` +
+          `'regional_configs' nor a 'new_regions.usd_price' anchor — Play would create it ` +
+          `as DRAFT with no price (silent failure before #2428). Add one of:\n` +
+          `  - regional_configs: [...]    (explicit per-region prices)\n` +
+          `  - new_regions: { usd_price: { ... } }    (anchor for auto-conversion)`,
+      );
+    }
+    // convertRegionPrices wants the anchor in Schema$Money wire shape
+    // (currencyCode + units-as-string + nanos); we hold YAML's PlayMoney
+    // (currency_code + units-as-number). Convert at each boundary.
+    const wireAnchor = moneyToWire(po.new_regions.usd_price);
+    const converted = await client.convertRegionPrices(wireAnchor);
+    // Play's wire requires both usd_price + eur_price on newRegionsConfig.
+    // Backfill the missing eur_price using the converter's `otherRegions`
+    // EUR equivalent so the user doesn't have to track two anchors in YAML.
+    if (!po.new_regions.eur_price && converted.otherRegionsEur) {
+      const eur = moneyFromWire(converted.otherRegionsEur);
+      if (eur) po.new_regions.eur_price = eur;
+    }
+    const inheritedAvailability = po.new_regions.availability;
+    const expanded: NonNullable<PurchaseOption['regional_configs']> = [];
+    for (const [region, wirePrice] of Array.from(converted.perRegion.entries()).sort(([a], [b]) =>
+      a.localeCompare(b),
+    )) {
+      const price = moneyFromWire(wirePrice);
+      if (!price) continue;
+      expanded.push({
+        region,
+        price,
+        ...(inheritedAvailability && { availability: inheritedAvailability }),
+      });
+    }
+    po.regional_configs = expanded;
+    console.log(
+      chalk.gray(
+        `    expanded ${po.purchase_option_id} → ${expanded.length} regions (USD ${po.new_regions.usd_price.units}.${(po.new_regions.usd_price.nanos ?? 0).toString().padStart(9, '0').slice(0, 2)} anchor)`,
+      ),
+    );
+  }
+}
+
 function purchaseOptionToWire(po: PurchaseOption): Schema$OneTimeProductPurchaseOption {
   const out: Schema$OneTimeProductPurchaseOption = {
     purchaseOptionId: po.purchase_option_id,
@@ -361,9 +435,14 @@ function purchaseOptionToWire(po: PurchaseOption): Schema$OneTimeProductPurchase
     };
   }
   if (po.new_regions) {
+    // YAML schema makes both anchors optional; `expandOneTimeProductPricing`
+    // backfills the missing one from `convertRegionPrices`' `otherRegions`
+    // EUR equivalent before we get here, so the anchor-only YAML path arrives
+    // with both fields populated. Stay tolerant on emit anyway — guards
+    // against future callers that bypass the expand helper.
     out.newRegionsConfig = {
-      usdPrice: moneyToWire(po.new_regions.usd_price),
-      eurPrice: moneyToWire(po.new_regions.eur_price),
+      ...(po.new_regions.usd_price && { usdPrice: moneyToWire(po.new_regions.usd_price) }),
+      ...(po.new_regions.eur_price && { eurPrice: moneyToWire(po.new_regions.eur_price) }),
       ...(po.new_regions.availability && {
         availability: availabilityToWire(po.new_regions.availability),
       }),
@@ -673,6 +752,12 @@ export function registerIapCommands(program: Command): void {
             continue;
           }
           const regionsVersion = (live.regionsVersion as any)?.version ?? defaultRegionsVersion;
+          // Anchor expansion: same fan-out as `iap create` so a YAML purchase
+          // option with only a `new_regions` anchor sync's a real per-region
+          // price into Play, not a silent unpriced patch. See #2428.
+          if (!dry) {
+            await expandOneTimeProductPricing(productId, yamlProduct, client);
+          }
           const body = oneTimeProductToWire(yamlProduct);
           if (dry) {
             console.log(chalk.gray(`  [dry-run] one-time product: ${productId} (${body.listings?.length ?? 0} loc, ${body.purchaseOptions?.length ?? 0} opts)`));
@@ -812,7 +897,17 @@ export function registerIapCommands(program: Command): void {
         // Second pass: actually create.
         for (const job of toCreate) {
           if (job.kind === 'onetime') {
-            const body = oneTimeProductToWire(yamlState.purchases[job.productId]);
+            const purchase = yamlState.purchases[job.productId];
+            // Anchor expansion: when a purchase option carries a USD anchor
+            // but no explicit per-region prices, Play would otherwise create
+            // the product DRAFT-with-no-price (issue #2428). Expand in-memory
+            // via monetization.convertRegionPrices BEFORE shaping the wire
+            // payload; the resulting regional_configs land in the create body
+            // alongside whatever the YAML already declared.
+            if (!dry) {
+              await expandOneTimeProductPricing(job.productId, purchase, client);
+            }
+            const body = oneTimeProductToWire(purchase);
             if (dry) {
               console.log(chalk.gray(`  [dry-run] + one-time product: ${job.productId}`));
             } else {
