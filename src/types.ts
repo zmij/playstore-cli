@@ -136,11 +136,15 @@ export interface PurchaseOption {
     /** Optional grace period after consumption start before revocation. */
     expiration_period?: string;
   };
-  /** Fallback pricing for any region Play opens in future. Both
-   *  `usd_price` and `eur_price` required when this block is present. */
+  /** Fallback pricing for any region Play opens in future. At least one of
+   *  `usd_price` / `eur_price` should be set; both is fine. When only one
+   *  is provided, Play uses that single anchor for new-region pricing. The
+   *  anchor is also used by `iap create`/`sync` to expand into per-region
+   *  `regional_configs` via `monetization.convertRegionPrices` when the
+   *  YAML doesn't carry explicit ones (#2428). */
   new_regions?: {
-    usd_price: PlayMoney;
-    eur_price: PlayMoney;
+    usd_price?: PlayMoney;
+    eur_price?: PlayMoney;
     availability?: PlayAvailability;
   };
   /** Explicit per-region pricing. Currency must match the region's
